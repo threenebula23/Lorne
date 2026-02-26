@@ -11,6 +11,8 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph, MessagesState
 from langgraph.prebuilt import ToolNode
 
+from system_promt import SYSTEM_PROMPT
+
 load_dotenv()
 
 YOU_COLOR = "\u001b[94m"
@@ -22,6 +24,89 @@ def resolve_abs_path(path_str: str) -> Path:
     if not path.is_absolute():
         path = (Path.cwd() / path).resolve()
     return path
+
+def analyze_project_structure(root_path: Path = None) -> str:
+    """Анализирует структуру проекта и создает контекстное описание"""
+    if root_path is None:
+        root_path = Path.cwd()
+    
+    project_context = []
+    project_context.append(f"=== СТРУКТУРА ПРОЕКТА: {root_path.name} ===\n")
+    
+    def scan_directory(directory: Path, prefix: str = "", is_last: bool = True):
+        if directory.name.startswith('.') or directory.name == '__pycache__':
+            return
+        
+        # Добавляем текущую директорию
+        connector = "└── " if is_last else "├── "
+        project_context.append(f"{prefix}{connector}{directory.name}/")
+        
+        # Получаем все элементы в директории
+        try:
+            items = list(directory.iterdir())
+        except PermissionError:
+            project_context.append(f"{prefix}{'    ' if is_last else '│   '}[Нет доступа]")
+            return
+        
+        # Сортируем: сначала директории, потом файлы
+        dirs = [item for item in items if item.is_dir()]
+        files = [item for item in items if item.is_file()]
+        
+        dirs.sort(key=lambda x: x.name.lower())
+        files.sort(key=lambda x: x.name.lower())
+        
+        all_items = dirs + files
+        
+        for i, item in enumerate(all_items):
+            is_last_item = (i == len(all_items) - 1)
+            extension = "    " if is_last else "│   "
+            
+            if item.is_dir():
+                scan_directory(item, prefix + extension, is_last_item)
+            else:
+                # Для файлов показываем расширение и размер
+                file_size = item.stat().st_size if item.exists() else 0
+                size_str = f" ({file_size} bytes)" if file_size > 0 else ""
+                file_connector = "└── " if is_last_item else "├── "
+                project_context.append(f"{prefix}{extension}{file_connector}{item.name}{size_str}")
+    
+    # Начинаем сканирование с корневой директории
+    scan_directory(root_path)
+    
+    # Добавляем информацию о типах файлов
+    file_types = {}
+    total_files = 0
+    
+    for file_path in root_path.rglob('*'):
+        if file_path.is_file() and not str(file_path).startswith('.') and '__pycache__' not in str(file_path):
+            suffix = file_path.suffix or 'no_extension'
+            if suffix not in file_types:
+                file_types[suffix] = 0
+            file_types[suffix] += 1
+            total_files += 1
+    
+    project_context.append(f"\n=== СТАТИСТИКА ПРОЕКТА ===")
+    project_context.append(f"Всего файлов: {total_files}")
+    project_context.append("Типы файлов:")
+    for ext, count in sorted(file_types.items(), key=lambda x: x[1], reverse=True):
+        project_context.append(f"  {ext}: {count}")
+    
+    # Добавляем информацию о ключевых файлах
+    project_context.append(f"\n=== КЛЮЧЕВЫЕ ФАЙЛЫ ПРОЕКТА ===")
+    key_files = []
+    for file_path in root_path.rglob('*'):
+        if file_path.is_file() and file_path.suffix == '.py':
+            key_files.append(file_path)
+    
+    # Сортируем по размеру (сначала самые большие)
+    key_files.sort(key=lambda x: x.stat().st_size, reverse=True)
+    
+    for i, file_path in enumerate(key_files[:5]):  # Показываем 5 самых больших файлов
+        rel_path = file_path.relative_to(root_path)
+        size = file_path.stat().st_size
+        project_context.append(f"{i+1}. {rel_path} ({size} bytes)")
+    
+    return '\n'.join(project_context)
 
 @tool
 def read_file(filename: str) -> Dict[str, Any]:
@@ -75,33 +160,7 @@ def edit_file(path: str, old_str: str, new_str: str) -> Dict[str, Any]:
 
 tools = [read_file, list_files, edit_file]
 
-SYSTEM_PROMPT = """
-Ты помощник в кодинге, цель которого - помогать в решении задач кодинга.
 
-У тебя есть доступ к набору инструментов для работы с файлами:
-- read_file(filename: str) -> Dict: Получает полное содержимое файла.
-- list_files(path: str) -> Dict: Листинг файлов в директории.
-- edit_file(path: str, old_str: str, new_str: str) -> Dict: Заменяет первое вхождение old_str на new_str в файле. Если old_str пустой, создает или перезаписывает файл содержимым new_str.
-
-Если пользователь просит написать код или создать файл, сгенерируй содержимое и используй edit_file с old_str="" для создания файла.
-
-При генерации аргументов вызова инструмента убедитесь, что все строки являются допустимыми JSON-данными, экранируя внутренние двойные кавычки символом \". Например, используйте \"print(\\\"Hello, World!\\\")\" вместо \"print(\"Hello, World!\")\". Поместите ПОЛНОЕ содержимое в new_str без дополнительного текста.
-
-Используй инструменты когда нужно взаимодействовать с файловой системой.
-
-Когда тебе нужно использовать инструмент, используй вызовы инструментов в формате, предоставленном моделью.
-
-После получения результатов инструмента, проанализируй их и сообщи пользователю о результате (например, "Файл создан").
-
-Если инструмент не требуется, отвечай обычным образом.
-
-Всегда предоставляй финальный ответ пользователю после завершения задачи.
-
-To call tools, output ONLY a JSON array of objects like:
-[{"id": "call_id", "type": "function", "function": {"name": "tool_name", "arguments": {"arg": "value"}}}]
-For multiple tools, use an array. Escape inner quotes in arguments with \".
-For normal responses, output plain text without JSON.
-"""
 
 llm = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1",
@@ -112,7 +171,17 @@ llm = ChatOpenAI(
 def call_model(state: MessagesState) -> Dict[str, List[AIMessage]]:
     messages = state["messages"]
     raw_response = llm.invoke(messages)
-    fixed_content = repair_json(raw_response.content)
+    
+    # Clean the content to remove invalid Unicode characters BEFORE processing
+    content = raw_response.content
+    if isinstance(content, str):
+        # Remove surrogate characters that cause encoding issues
+        content = content.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
+    
+    # Create a new AIMessage with the cleaned content
+    cleaned_response = AIMessage(content=content, tool_calls=raw_response.tool_calls)
+    
+    fixed_content = repair_json(content)
     if fixed_content.strip():
         try:
             parsed_tools = json.loads(fixed_content)
@@ -120,7 +189,7 @@ def call_model(state: MessagesState) -> Dict[str, List[AIMessage]]:
                 parsed_tools = [parsed_tools]
             tool_calls = []
             for tool in parsed_tools:
-                if "function" in tool:
+                if isinstance(tool, dict) and "function" in tool:
                     func = tool["function"]
                     args = func.get("arguments", {})
                     if isinstance(args, str):
@@ -168,7 +237,37 @@ workflow.add_edge("tools", "agent")
 app = workflow.compile()
 
 def run_coding_agent_loop():
-    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+    # Автоматически анализируем структуру проекта при запуске
+    print(f"{ASSISTANT_COLOR}Анализирую структуру проекта...{RESET_COLOR}")
+    project_structure = analyze_project_structure()
+    
+    # Создаем улучшенный системный промпт с информацией о проекте
+    enhanced_system_prompt = f"""{SYSTEM_PROMPT}
+
+=== КОНТЕКСТ ПРОЕКТА ===
+{project_structure}
+
+=== ИНСТРУКЦИИ ===
+Теперь ты знаешь структуру этого проекта. Используй эту информацию, чтобы:
+1. Лучше понимать, о каких файлах идет речь
+2. Предлагать более релевантные решения
+3. Знать, где находятся ключевые файлы
+4. Понимать архитектуру проекта
+
+Помни эту информацию на протяжении всей сессии.
+"""
+    
+    messages = [SystemMessage(content=enhanced_system_prompt)]
+    
+    print(f"{ASSISTANT_COLOR}Проект проанализирован! Могу помочь с любыми задачами по кодингу.{RESET_COLOR}")
+    print(f"{ASSISTANT_COLOR}Доступные команды:{RESET_COLOR}")
+    print("  - Просто опиши задачу, которую нужно решить")
+    print("  - Спроси о структуре проекта")
+    print("  - Попроси показать содержимое конкретного файла")
+    print("  - Попроси создать новый файл")
+    print("  - Попроси внести изменения в существующий файл")
+    print()
+    
     while True:
         try:
             user_input = input(f"{YOU_COLOR}You:{RESET_COLOR} ")
