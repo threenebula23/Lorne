@@ -92,13 +92,8 @@ REM ─── Create tca.bat command ──────────────�
 set "TCA_BAT=%VENV_DIR%\Scripts\tca.bat"
 (
     echo @echo off
-    echo set "TCA_ROOT=%TCA_DIR%"
-    echo set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
-    echo if "%%1" neq "" if exist "%%1\" (
-    echo     cd /d "%%1"
-    echo     shift
-    echo ^)
-    echo "%%VENV_PYTHON%%" "%%TCA_ROOT%%\tca.py" %%*
+    echo REM TCA wrapper — all argument handling is in tca.py
+    echo "%VENV_DIR%\Scripts\python.exe" "%TCA_DIR%\tca.py" %%*
 ) > "%TCA_BAT%"
 
 REM ─── Add to PATH ────────────────────────────────────

@@ -93,15 +93,8 @@ fi
 TCA_BIN="$VENV_DIR/bin/tca"
 cat > "$TCA_BIN" << SCRIPT
 #!/bin/bash
-TCA_ROOT="$TCA_DIR"
-VENV_PYTHON="$VENV_DIR/bin/python"
-
-if [ -n "\$1" ] && [ -d "\$1" ]; then
-    cd "\$1"
-    shift
-fi
-
-exec "\$VENV_PYTHON" "\$TCA_ROOT/tca.py" "\$@"
+# TCA wrapper — all argument handling (directory, env=KEY) is in tca.py
+exec "$VENV_DIR/bin/python" "$TCA_DIR/tca.py" "\$@"
 SCRIPT
 chmod +x "$TCA_BIN"
 

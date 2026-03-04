@@ -44,15 +44,35 @@ def _init_db() -> None:
     conn.close()
 
 
+def _tool_call_to_dict(tc: Any) -> Dict[str, Any]:
+    """Normalize a tool call (LangChain ToolCall or dict) to a plain dict."""
+    if isinstance(tc, dict):
+        return {
+            "name": tc.get("name", ""),
+            "args": tc.get("args", {}),
+            "id": tc.get("id", ""),
+            "type": tc.get("type", "tool_call"),
+        }
+    return {
+        "name": getattr(tc, "name", ""),
+        "args": getattr(tc, "args", {}),
+        "id": getattr(tc, "id", ""),
+        "type": getattr(tc, "type", "tool_call"),
+    }
+
+
 def _message_to_dict(m: Any) -> Dict[str, Any]:
     """Приводит сообщение LangChain к простому dict для JSON."""
     if isinstance(m, dict):
         return m
-    out = {"type": type(m).__name__, "content": getattr(m, "content", "") or ""}
+    out: Dict[str, Any] = {
+        "type": type(m).__name__,
+        "content": getattr(m, "content", "") or "",
+    }
     if hasattr(m, "tool_calls") and m.tool_calls:
-        out["tool_calls"] = getattr(m, "tool_calls", [])
+        out["tool_calls"] = [_tool_call_to_dict(tc) for tc in m.tool_calls]
     if type(m).__name__ == "ToolMessage":
-        out["tool_call_id"] = getattr(m, "tool_call_id", "")
+        out["tool_call_id"] = getattr(m, "tool_call_id", "") or ""
     return out
 
 

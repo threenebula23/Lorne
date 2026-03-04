@@ -1,6 +1,11 @@
 """
 Точка входа: запуск агента в терминале.
-Запуск из корня проекта: python -m Terminal
+
+Использование:
+    python -m Terminal                       — запуск в текущей директории
+    python -m Terminal /path/to/project      — запуск в указанном проекте
+    python -m Terminal env=<API_KEY>         — запуск с API ключом OpenRouter
+    python -m Terminal /path env=<KEY>       — оба варианта
 """
 import os
 import sys
@@ -32,9 +37,6 @@ elif _env_root.exists():
     from dotenv import load_dotenv
     load_dotenv(_env_root)
 
-# Agent expects cwd to be the project root
-os.chdir(_PROJECT_ROOT)
-
 
 def main():
     if not os.environ.get("OPENROUTER_API_KEY"):
@@ -47,6 +49,14 @@ def main():
         print("    3. Переменная окружения:")
         print("       export OPENROUTER_API_KEY=sk-or-v1-ваш_ключ\n")
         sys.exit(1)
+
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        target = Path(sys.argv[1]).resolve()
+        if target.is_dir():
+            os.chdir(target)
+        else:
+            print(f"Директория не найдена: {target}")
+            sys.exit(1)
 
     from Agent.agent import run_coding_agent_loop
     run_coding_agent_loop()

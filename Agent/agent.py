@@ -286,32 +286,139 @@ def _strip_think_tags(text: str) -> str:
     return _re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
 
 
+# ─── Message sanitization ──────────────────────────────────────────
+
+def _sanitize_messages(messages: List[Any]) -> List[Any]:
+    """Fix message history to prevent API errors.
+
+    Handles two classes of problems that cause 400 "No tool call found":
+    1. Orphaned ToolMessages — their AIMessage was lost (e.g. compaction/restore)
+    2. Dangling tool_calls — AIMessage has tool_calls but ToolMessages are missing
+       (e.g. interrupted session, partial save)
+    """
+    declared_ids: set = set()
+    answered_ids: set = set()
+
+    for msg in messages:
+        if isinstance(msg, AIMessage):
+            for tc in (getattr(msg, "tool_calls", None) or []):
+                tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                if tc_id:
+                    declared_ids.add(tc_id)
+        elif isinstance(msg, ToolMessage):
+            tc_id = getattr(msg, "tool_call_id", "")
+            if tc_id:
+                answered_ids.add(tc_id)
+
+    orphan_ids = answered_ids - declared_ids
+    dangling_ids = declared_ids - answered_ids
+
+    if not orphan_ids and not dangling_ids:
+        return messages
+
+    if orphan_ids:
+        print_warning(f"Удалено {len(orphan_ids)} осиротевших результатов инструментов")
+    if dangling_ids:
+        print_warning(f"Исправлено {len(dangling_ids)} незавершённых вызовов инструментов")
+
+    result: List[Any] = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            tc_id = getattr(msg, "tool_call_id", "")
+            if tc_id in orphan_ids:
+                continue
+            result.append(msg)
+        elif isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            tc_ids: set = set()
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                if tc_id:
+                    tc_ids.add(tc_id)
+            dangling_in_msg = tc_ids & dangling_ids
+            if dangling_in_msg:
+                if dangling_in_msg == tc_ids:
+                    content = msg.content or "[Вызов инструментов был прерван]"
+                    result.append(AIMessage(content=content))
+                else:
+                    result.append(msg)
+                    for tc_id in dangling_in_msg:
+                        result.append(ToolMessage(
+                            content="[Операция была прервана]",
+                            tool_call_id=tc_id,
+                        ))
+            else:
+                result.append(msg)
+        else:
+            result.append(msg)
+
+    return result
+
+
+# ─── Transient error retry ─────────────────────────────────────────
+
+_MAX_LLM_RETRIES = 2
+
+_TRANSIENT_PATTERNS = [
+    "provider returned error",
+    "rate limit",
+    "overloaded",
+    "server error",
+    "no tool call found",
+    "trust-request-chat-template",
+    "bad gateway",
+    "service unavailable",
+    "529",
+    "internally_terminated",
+]
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """Check if the error is a transient provider error that may resolve on retry."""
+    msg = str(exc).lower()
+    return any(p in msg for p in _TRANSIENT_PATTERNS)
+
+
 # ─── LangGraph nodes ───────────────────────────────────────────────
 def call_model(state: MessagesState) -> Dict[str, List[AIMessage]]:
     global llm_with_tools, _parallel_tools_disabled
-    messages = state["messages"]
-    spinner = _LiveSpinner("Модель думает")
-    spinner.start()
-    try:
-        raw_response = llm_with_tools.invoke(messages)
-    except Exception as e:
-        if _is_retriable_bind_error(e) and not _parallel_tools_disabled:
-            print_warning("Провайдер не поддерживает parallel_tool_calls — повторяю без него")
-            _parallel_tools_disabled = True
-            llm_with_tools = _bind_tools_safe(llm, MODEL_NAME, force_no_parallel=True)
-            try:
-                raw_response = llm_with_tools.invoke(messages)
-            except Exception as e2:
-                spinner.stop()
-                error_msg = f"Ошибка LLM: {type(e2).__name__}: {e2}"
-                print_error(error_msg)
-                return {"messages": [AIMessage(content=error_msg)]}
-        else:
+    messages = _sanitize_messages(state["messages"])
+
+    raw_response = None
+    last_error = None
+
+    for attempt in range(_MAX_LLM_RETRIES + 1):
+        spinner = _LiveSpinner("Модель думает")
+        spinner.start()
+        try:
+            raw_response = llm_with_tools.invoke(messages)
             spinner.stop()
-            error_msg = f"Ошибка LLM: {type(e).__name__}: {e}"
-            print_error(error_msg)
-            return {"messages": [AIMessage(content=error_msg)]}
-    spinner.stop()
+            last_error = None
+            break
+        except Exception as e:
+            spinner.stop()
+            last_error = e
+
+            if _is_retriable_bind_error(e) and not _parallel_tools_disabled:
+                print_warning("Провайдер не поддерживает parallel_tool_calls — повторяю без него")
+                _parallel_tools_disabled = True
+                llm_with_tools = _bind_tools_safe(llm, MODEL_NAME, force_no_parallel=True)
+                continue
+
+            if _is_transient_error(e) and attempt < _MAX_LLM_RETRIES:
+                wait = (attempt + 1) * 3
+                print_warning(
+                    f"Ошибка провайдера, повтор через {wait}с… "
+                    f"({attempt + 1}/{_MAX_LLM_RETRIES})"
+                )
+                time.sleep(wait)
+                continue
+
+            break
+
+    if last_error is not None:
+        error_msg = f"Ошибка LLM: {type(last_error).__name__}: {last_error}"
+        print_error(error_msg)
+        return {"messages": [AIMessage(content=error_msg)]}
 
     content = raw_response.content or ""
     if isinstance(content, str):
@@ -549,8 +656,18 @@ def compact_conversation(messages: List[Any], keep_last: int = 10) -> List[Any]:
     if len(non_system) <= keep_last:
         return messages
 
-    old_msgs = non_system[:-keep_last]
-    recent_msgs = non_system[-keep_last:]
+    split_idx = len(non_system) - keep_last
+
+    # Don't orphan ToolMessages: walk backwards to include the AIMessage
+    # that generated them, keeping the tool call group intact.
+    while split_idx > 0 and isinstance(non_system[split_idx], ToolMessage):
+        split_idx -= 1
+
+    if split_idx <= 0:
+        return messages
+
+    old_msgs = non_system[:split_idx]
+    recent_msgs = non_system[split_idx:]
 
     summary_parts = []
     for msg in old_msgs:
@@ -650,7 +767,9 @@ def run_coding_agent_loop():
                         restored.append(AIMessage(content=d.get("content", "") or "", tool_calls=d.get("tool_calls", [])))
                     elif t == "ToolMessage":
                         restored.append(ToolMessage(content=str(d.get("content", "")), tool_call_id=d.get("tool_call_id", "")))
-                messages = [SystemMessage(content=enhanced_system_prompt)] + restored
+                messages = _sanitize_messages(
+                    [SystemMessage(content=enhanced_system_prompt)] + restored
+                )
                 session_id = target
                 print_success(f"Сессия восстановлена: {session_id} ({len(restored)} сообщений)")
                 tail = [m for m in restored if isinstance(m, (HumanMessage, AIMessage))][-4:]
