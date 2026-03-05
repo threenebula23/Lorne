@@ -28,9 +28,26 @@ echo ║  TCA — Установка Terminal Coding Assistant   ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 
-REM ─── Python ─────────────────────────────────────────
+REM ─── Python (py launcher first — стандарт на Windows) ─
 set "PYTHON="
-for %%P in (python3 python py) do (
+
+REM 1. Python Launcher (py.exe) — приоритет на Windows
+where py >nul 2>&1
+if !errorlevel! equ 0 (
+    py -3 --version >nul 2>&1
+    if !errorlevel! equ 0 (
+        set "PYTHON=py -3"
+        goto :found_python
+    )
+    py --version >nul 2>&1
+    if !errorlevel! equ 0 (
+        set "PYTHON=py"
+        goto :found_python
+    )
+)
+
+REM 2. python, python3
+for %%P in (python python3) do (
     where %%P >nul 2>&1
     if !errorlevel! equ 0 (
         set "PYTHON=%%P"
@@ -38,11 +55,12 @@ for %%P in (python3 python py) do (
     )
 )
 
-echo   X Python не найден. Установите Python 3.10+ и попробуйте снова.
+echo   X Python не найден. Установите Python 3.10+ с python.org
+echo     и отметьте "Add Python to PATH" или установите Python Launcher.
 exit /b 1
 
 :found_python
-for /f "tokens=2 delims= " %%V in ('%PYTHON% --version 2^>^&1') do set "PYVER=%%V"
+for /f "tokens=2 delims= " %%V in ('"%PYTHON%" --version 2^>^&1') do set "PYVER=%%V"
 for /f "tokens=1,2 delims=." %%A in ("%PYVER%") do (
     set "PY_MAJOR=%%A"
     set "PY_MINOR=%%B"
@@ -62,7 +80,7 @@ set "VENV_DIR=%TCA_DIR%\.venv"
 
 if not exist "%VENV_DIR%" (
     echo   ... Создаю виртуальное окружение...
-    %PYTHON% -m venv "%VENV_DIR%"
+    "%PYTHON%" -m venv "%VENV_DIR%"
     echo   √ Виртуальное окружение создано
 ) else (
     echo   √ Виртуальное окружение найдено

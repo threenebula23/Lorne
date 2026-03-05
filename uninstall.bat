@@ -22,22 +22,15 @@ echo ║  TCA — Деинсталляция                        ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 
-REM ─── Remove virtual environment ────────────────────
+REM ─── Remove virtual environment (includes tca.bat) ──
 set "VENV_DIR=%TCA_DIR%\.venv"
 
 if exist "%VENV_DIR%" (
     echo   ... Удаляю виртуальное окружение...
     rmdir /s /q "%VENV_DIR%"
-    echo   √ Виртуальное окружение удалено
+    echo   √ Виртуальное окружение удалено ^(включая tca.bat^)
 ) else (
     echo   Виртуальное окружение не найдено
-)
-
-REM ─── Remove tca.bat from Scripts if exists ─────────
-set "TCA_BAT=%VENV_DIR%\Scripts\tca.bat"
-if exist "%TCA_BAT%" (
-    del /q "%TCA_BAT%"
-    echo   √ Лаунчер tca.bat удалён
 )
 
 REM ─── Remove TCA data files (optional) ─────────────
