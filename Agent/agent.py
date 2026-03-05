@@ -186,7 +186,7 @@ def analyze_project_structure(root_path: Optional[Path] = None) -> str:
 # ─── LLM init ──────────────────────────────────────────────────────
 MODEL_PROFILE = normalize_profile(os.getenv("TCA_PROFILE", "balanced"))
 MODEL_NAME = ""
-CONTEXT_LIMIT = get_context_limit("meta-llama/llama-3.1-8b-instruct")
+CONTEXT_LIMIT = get_context_limit("arcee-ai/trinity-large-preview:free")
 llm = None
 llm_with_tools = None
 

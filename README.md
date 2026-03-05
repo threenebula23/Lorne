@@ -11,7 +11,7 @@
 - **RAG-поиск** — индексирование файлов проекта и поиск по ним
 - **Сессии** — сохранение и восстановление диалогов между запусками (SQLite)
 - **Красивый UI** — Rich-панели, подсветка синтаксиса, прогресс-бары, Markdown
-- **Много моделей** — 18+ моделей через OpenRouter (бесплатные, дешёвые, платные)
+- **Много моделей** — 27 моделей через OpenRouter (бесплатные, дешёвые, платные, про)
 - **Генерация PDF** — создание документов через ReportLab
 
 ---
@@ -157,7 +157,7 @@ python -m Terminal
 |---|---|---|
 | `OPENROUTER_API_KEY` | API-ключ OpenRouter | — (обязательно) |
 | `TCA_PROFILE` | Профиль по умолчанию | `balanced` |
-| `TCA_MODEL` | Модель по умолчанию | `meta-llama/llama-3.1-8b-instruct` |
+| `TCA_MODEL` | Модель по умолчанию | `arcee-ai/trinity-large-preview:free` |
 | `TCA_BASE_URL` | Base URL для API | `https://openrouter.ai/api/v1` |
 | `TCA_MODEL_FAST` | Модель для профиля fast | значение `TCA_MODEL` |
 | `TCA_MODEL_BALANCED` | Модель для профиля balanced | значение `TCA_MODEL` |
@@ -176,13 +176,16 @@ python -m Terminal
 Команда `/model` показывает полный список. Краткая сводка:
 
 **Бесплатные:**
-Llama 3.1 8B, Llama 3.3 70B, Llama 4 Scout, Llama 4 Maverick, Qwen 2.5 Coder 32B, Gemma 3 27B
-
-**Дешёвые:**
-DeepSeek V3, DeepSeek R1, QwQ 32B, Gemini 2.5 Flash, GPT-4o Mini, GPT-4.1 Mini/Nano, Claude 3.5 Haiku
+Trinity Large, Step 3.5 Flash, Qwen3 235B Thinking
 
 **Платные:**
-GPT-4o, GPT-4.1, Gemini 2.5 Pro, Claude Sonnet 4, Claude 3.5 Sonnet, Mistral Large
+Qwen3 235B Thinking, Qwen3 Coder 30B, Qwen3.5 Flash, GPT OSS 120B, GPT-5 Nano, Gemini 2.5 Flash Lite
+
+**Доступные (cheap):**
+Qwen3 Coder Next, Qwen3.5 35B, Qwen3 Coder, Qwen3.5 Plus, Qwen3.5 397B, GPT-4o Mini, GPT-5 Mini, Gemini 2.5 Flash, Gemini 3 Flash, Grok 4.1 Fast, Grok Code Fast, DeepSeek V3.2
+
+**Про (pro):**
+GPT-5.1 Codex, GPT-5.3 Codex, Gemini 3.1 Pro, Claude Haiku 4.5, Claude Sonnet 4.6, Claude Opus 4.6
 
 Выбор модели сохраняется в `~/.tca_config.json` между запусками.
 
@@ -426,7 +429,7 @@ tools = [
 Добавьте запись в `AVAILABLE_MODELS` в `Agent/llm_provider.py`:
 
 ```python
-{"id": "provider/model-name", "name": "Display Name", "ctx": 128_000, "tier": "free|cheap|paid"},
+{"id": "provider/model-name", "name": "Display Name", "ctx": 128_000, "tier": "free|cheap|paid|pro"},
 ```
 
 Если провайдер модели поддерживает `parallel_tool_calls`, добавьте его в `_PROVIDER_CAPS`.

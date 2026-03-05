@@ -28,6 +28,9 @@ _PROVIDER_CAPS: Dict[str, Dict[str, bool]] = {
     "google/":      {"parallel_tool_calls": False, "native_tools": True},
     "qwen/":        {"parallel_tool_calls": False, "native_tools": True},
     "mistralai/":   {"parallel_tool_calls": False, "native_tools": True},
+    "arcee-ai/":    {"parallel_tool_calls": False, "native_tools": True},
+    "stepfun/":     {"parallel_tool_calls": False, "native_tools": True},
+    "x-ai/":        {"parallel_tool_calls": False, "native_tools": True},
 }
 
 
@@ -50,34 +53,39 @@ def is_reasoning_model(model_id: str) -> bool:
     return any(tag in _id for tag in ("deepseek-r1", "qwq", "/o1", "/o3", "/o4"))
 
 
-# ─── Popular OpenRouter models (curated, updated Feb 2026) ───────
+# ─── Popular OpenRouter models (curated) ───────────────────────────
 AVAILABLE_MODELS: List[Dict[str, Any]] = [
     # --- free ---
-    {"id": "meta-llama/llama-4-scout:free",             "name": "Llama 4 Scout",         "ctx": 512_000,    "tier": "free"},
-    {"id": "meta-llama/llama-4-maverick:free",          "name": "Llama 4 Maverick",      "ctx": 256_000,    "tier": "free"},
-    {"id": "meta-llama/llama-3.3-70b-instruct",        "name": "Llama 3.3 70B",         "ctx": 131_072,    "tier": "free"},
-    {"id": "deepseek/deepseek-r1:free",                 "name": "DeepSeek R1 (free)",    "ctx": 164_000,    "tier": "free"},
-    {"id": "qwen/qwen-2.5-coder-32b-instruct",         "name": "Qwen 2.5 Coder 32B",   "ctx": 32_768,     "tier": "free"},
-    {"id": "google/gemma-3-27b-it:free",                "name": "Gemma 3 27B",           "ctx": 131_072,    "tier": "free"},
-    # --- cheap ---
-    {"id": "deepseek/deepseek-chat",                    "name": "DeepSeek V3",           "ctx": 164_000,    "tier": "cheap"},
-    {"id": "deepseek/deepseek-r1",                      "name": "DeepSeek R1",           "ctx": 164_000,    "tier": "cheap"},
-    {"id": "deepseek/deepseek-r1-0528",                 "name": "DeepSeek R1 0528",      "ctx": 164_000,    "tier": "cheap"},
-    {"id": "qwen/qwq-32b",                              "name": "QwQ 32B",               "ctx": 131_072,    "tier": "cheap"},
-    {"id": "google/gemini-2.5-flash-preview",           "name": "Gemini 2.5 Flash",      "ctx": 1_048_576,  "tier": "cheap"},
-    {"id": "openai/gpt-4.1-mini",                       "name": "GPT-4.1 Mini",          "ctx": 1_047_576,  "tier": "cheap"},
-    {"id": "openai/gpt-4.1-nano",                       "name": "GPT-4.1 Nano",          "ctx": 1_047_576,  "tier": "cheap"},
-    {"id": "openai/o4-mini",                             "name": "O4 Mini",               "ctx": 200_000,    "tier": "cheap"},
-    {"id": "anthropic/claude-3.5-haiku",                "name": "Claude 3.5 Haiku",      "ctx": 200_000,    "tier": "cheap"},
+    {"id": "arcee-ai/trinity-large-preview:free",       "name": "Trinity Large",        "ctx": 131_072,    "tier": "free"},
+    {"id": "stepfun/step-3.5-flash:free",               "name": "Step 3.5 Flash",        "ctx": 131_072,    "tier": "free"},
+    {"id": "qwen/qwen3-235b-a22b-thinking-2507",         "name": "Qwen3 235B Thinking",   "ctx": 131_072,    "tier": "free"},
     # --- paid ---
-    {"id": "openai/gpt-4.1",                            "name": "GPT-4.1",               "ctx": 1_047_576,  "tier": "paid"},
-    {"id": "openai/o3",                                  "name": "O3",                    "ctx": 200_000,    "tier": "paid"},
-    {"id": "google/gemini-2.5-pro-preview",             "name": "Gemini 2.5 Pro",        "ctx": 1_048_576,  "tier": "paid"},
-    {"id": "anthropic/claude-sonnet-4",                 "name": "Claude Sonnet 4",       "ctx": 200_000,    "tier": "paid"},
-    {"id": "anthropic/claude-sonnet-4.5",               "name": "Claude Sonnet 4.5",     "ctx": 200_000,    "tier": "paid"},
-    {"id": "anthropic/claude-opus-4",                   "name": "Claude Opus 4",         "ctx": 200_000,    "tier": "paid"},
-    {"id": "anthropic/claude-opus-4.5",                 "name": "Claude Opus 4.5",       "ctx": 200_000,    "tier": "paid"},
-    {"id": "mistralai/mistral-large",                   "name": "Mistral Large",         "ctx": 131_072,    "tier": "paid"},
+    {"id": "qwen/qwen3-235b-a22b-thinking-2507",        "name": "Qwen3 235B Thinking",   "ctx": 131_072,    "tier": "paid"},
+    {"id": "qwen/qwen3-coder-30b-a3b-instruct",         "name": "Qwen3 Coder 30B",       "ctx": 131_072,    "tier": "paid"},
+    {"id": "qwen/qwen3.5-flash-02-23",                  "name": "Qwen3.5 Flash",        "ctx": 131_072,    "tier": "paid"},
+    {"id": "openai/gpt-oss-120b",                       "name": "GPT OSS 120B",          "ctx": 131_072,    "tier": "paid"},
+    {"id": "openai/gpt-5-nano",                         "name": "GPT-5 Nano",             "ctx": 131_072,    "tier": "paid"},
+    {"id": "google/gemini-2.5-flash-lite",              "name": "Gemini 2.5 Flash Lite", "ctx": 1_048_576,  "tier": "paid"},
+    # --- cheap ---
+    {"id": "qwen/qwen3-coder-next",                     "name": "Qwen3 Coder Next",     "ctx": 131_072,    "tier": "cheap"},
+    {"id": "qwen/qwen3.5-35b-a3b",                      "name": "Qwen3.5 35B",           "ctx": 131_072,    "tier": "cheap"},
+    {"id": "qwen/qwen3-coder",                          "name": "Qwen3 Coder",           "ctx": 131_072,    "tier": "cheap"},
+    {"id": "qwen/qwen3.5-plus-02-15",                   "name": "Qwen3.5 Plus",         "ctx": 131_072,    "tier": "cheap"},
+    {"id": "qwen/qwen3.5-397b-a17b",                    "name": "Qwen3.5 397B",         "ctx": 131_072,    "tier": "cheap"},
+    {"id": "openai/gpt-4o-mini",                        "name": "GPT-4o Mini",           "ctx": 128_000,    "tier": "cheap"},
+    {"id": "openai/gpt-5-mini",                         "name": "GPT-5 Mini",            "ctx": 131_072,    "tier": "cheap"},
+    {"id": "google/gemini-2.5-flash",                   "name": "Gemini 2.5 Flash",      "ctx": 1_048_576,  "tier": "cheap"},
+    {"id": "google/gemini-3-flash-preview",             "name": "Gemini 3 Flash",        "ctx": 1_048_576,  "tier": "cheap"},
+    {"id": "x-ai/grok-4.1-fast",                        "name": "Grok 4.1 Fast",         "ctx": 131_072,    "tier": "cheap"},
+    {"id": "x-ai/grok-code-fast-1",                     "name": "Grok Code Fast",       "ctx": 131_072,    "tier": "cheap"},
+    {"id": "deepseek/deepseek-v3.2",                     "name": "DeepSeek V3.2",         "ctx": 164_000,    "tier": "cheap"},
+    # --- pro ---
+    {"id": "openai/gpt-5.1-codex",                      "name": "GPT-5.1 Codex",         "ctx": 131_072,    "tier": "pro"},
+    {"id": "openai/gpt-5.3-codex",                      "name": "GPT-5.3 Codex",         "ctx": 131_072,    "tier": "pro"},
+    {"id": "google/gemini-3.1-pro-preview",             "name": "Gemini 3.1 Pro",         "ctx": 1_048_576,  "tier": "pro"},
+    {"id": "anthropic/claude-haiku-4.5",                "name": "Claude Haiku 4.5",       "ctx": 200_000,    "tier": "pro"},
+    {"id": "anthropic/claude-sonnet-4.6",               "name": "Claude Sonnet 4.6",     "ctx": 200_000,    "tier": "pro"},
+    {"id": "anthropic/claude-opus-4.6",                 "name": "Claude Opus 4.6",       "ctx": 200_000,    "tier": "pro"},
 ]
 
 
@@ -126,7 +134,7 @@ def _resolve_default_model() -> str:
     saved = get_saved_model()
     if saved:
         return saved
-    return "meta-llama/llama-3.1-8b-instruct"
+    return "arcee-ai/trinity-large-preview:free"
 
 
 def _build_profiles() -> Dict[ProfileName, Dict[str, object]]:

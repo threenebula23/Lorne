@@ -661,6 +661,7 @@ def display_model_selector(models: list, current_model: str) -> None:
         "free":  ("🆓", "Бесплатные", "green"),
         "cheap": ("💰", "Доступные",  "yellow"),
         "paid":  ("💎", "Премиум",    "magenta"),
+        "pro":   ("👑", "Про",        "cyan"),
     }
 
     table = Table(
