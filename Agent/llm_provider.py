@@ -50,30 +50,33 @@ def is_reasoning_model(model_id: str) -> bool:
     return any(tag in _id for tag in ("deepseek-r1", "qwq", "/o1", "/o3", "/o4"))
 
 
-# ─── Popular OpenRouter models (curated list) ──────────────────────
+# ─── Popular OpenRouter models (curated, updated Feb 2026) ───────
 AVAILABLE_MODELS: List[Dict[str, Any]] = [
     # --- free ---
-    {"id": "meta-llama/llama-3.1-8b-instruct",         "name": "Llama 3.1 8B",          "ctx": 128_000,    "tier": "free"},
-    {"id": "meta-llama/llama-3.3-70b-instruct",        "name": "Llama 3.3 70B",         "ctx": 131_072,    "tier": "free"},
     {"id": "meta-llama/llama-4-scout:free",             "name": "Llama 4 Scout",         "ctx": 512_000,    "tier": "free"},
     {"id": "meta-llama/llama-4-maverick:free",          "name": "Llama 4 Maverick",      "ctx": 256_000,    "tier": "free"},
+    {"id": "meta-llama/llama-3.3-70b-instruct",        "name": "Llama 3.3 70B",         "ctx": 131_072,    "tier": "free"},
+    {"id": "deepseek/deepseek-r1:free",                 "name": "DeepSeek R1 (free)",    "ctx": 164_000,    "tier": "free"},
     {"id": "qwen/qwen-2.5-coder-32b-instruct",         "name": "Qwen 2.5 Coder 32B",   "ctx": 32_768,     "tier": "free"},
     {"id": "google/gemma-3-27b-it:free",                "name": "Gemma 3 27B",           "ctx": 131_072,    "tier": "free"},
     # --- cheap ---
-    {"id": "deepseek/deepseek-chat-v3-0324",            "name": "DeepSeek V3 0324",      "ctx": 131_072,    "tier": "cheap"},
-    {"id": "deepseek/deepseek-r1",                      "name": "DeepSeek R1",           "ctx": 131_072,    "tier": "cheap"},
+    {"id": "deepseek/deepseek-chat",                    "name": "DeepSeek V3",           "ctx": 164_000,    "tier": "cheap"},
+    {"id": "deepseek/deepseek-r1",                      "name": "DeepSeek R1",           "ctx": 164_000,    "tier": "cheap"},
+    {"id": "deepseek/deepseek-r1-0528",                 "name": "DeepSeek R1 0528",      "ctx": 164_000,    "tier": "cheap"},
     {"id": "qwen/qwq-32b",                              "name": "QwQ 32B",               "ctx": 131_072,    "tier": "cheap"},
     {"id": "google/gemini-2.5-flash-preview",           "name": "Gemini 2.5 Flash",      "ctx": 1_048_576,  "tier": "cheap"},
-    {"id": "openai/gpt-4o-mini",                        "name": "GPT-4o Mini",           "ctx": 128_000,    "tier": "cheap"},
     {"id": "openai/gpt-4.1-mini",                       "name": "GPT-4.1 Mini",          "ctx": 1_047_576,  "tier": "cheap"},
     {"id": "openai/gpt-4.1-nano",                       "name": "GPT-4.1 Nano",          "ctx": 1_047_576,  "tier": "cheap"},
+    {"id": "openai/o4-mini",                             "name": "O4 Mini",               "ctx": 200_000,    "tier": "cheap"},
     {"id": "anthropic/claude-3.5-haiku",                "name": "Claude 3.5 Haiku",      "ctx": 200_000,    "tier": "cheap"},
     # --- paid ---
-    {"id": "openai/gpt-4o",                             "name": "GPT-4o",                "ctx": 128_000,    "tier": "paid"},
     {"id": "openai/gpt-4.1",                            "name": "GPT-4.1",               "ctx": 1_047_576,  "tier": "paid"},
+    {"id": "openai/o3",                                  "name": "O3",                    "ctx": 200_000,    "tier": "paid"},
     {"id": "google/gemini-2.5-pro-preview",             "name": "Gemini 2.5 Pro",        "ctx": 1_048_576,  "tier": "paid"},
     {"id": "anthropic/claude-sonnet-4",                 "name": "Claude Sonnet 4",       "ctx": 200_000,    "tier": "paid"},
-    {"id": "anthropic/claude-3.5-sonnet",               "name": "Claude 3.5 Sonnet",     "ctx": 200_000,    "tier": "paid"},
+    {"id": "anthropic/claude-sonnet-4.5",               "name": "Claude Sonnet 4.5",     "ctx": 200_000,    "tier": "paid"},
+    {"id": "anthropic/claude-opus-4",                   "name": "Claude Opus 4",         "ctx": 200_000,    "tier": "paid"},
+    {"id": "anthropic/claude-opus-4.5",                 "name": "Claude Opus 4.5",       "ctx": 200_000,    "tier": "paid"},
     {"id": "mistralai/mistral-large",                   "name": "Mistral Large",         "ctx": 131_072,    "tier": "paid"},
 ]
 

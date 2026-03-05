@@ -7,5 +7,7 @@ langchain-openai>=0.1.0
 langgraph>=0.0.20
 # Beautiful terminal output (Claude Code-like UI)
 rich>=13.0.0
+# Web search (DuckDuckGo/Bing/Google metasearch, no API key needed)
+ddgs>=9.0.0
 # Optional: PDF generation (falls back to .txt if missing)
 reportlab>=4.0.0

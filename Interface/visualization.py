@@ -629,33 +629,179 @@ def print_welcome(model_name: str, profile: str, project_name: str, balance: str
         print(f"{'═' * 50}\n")
 
 
+def display_shell_command(command: str) -> None:
+    """Display a user-initiated shell command with terminal-like styling."""
+    if HAS_RICH:
+        console.print(
+            Panel(
+                Text.assemble(
+                    ("❯ ", "bold bright_green"),
+                    (command, "bold white"),
+                ),
+                title="[bold bright_green]  Terminal [/bold bright_green]",
+                title_align="left",
+                border_style="bright_green",
+                box=box.HEAVY,
+                padding=(0, 1),
+            )
+        )
+    else:
+        print(f"\n  {GREEN}{BOLD}$ {command}{RESET}")
+
+
+def display_model_selector(models: list, current_model: str) -> None:
+    """Display a rich model selection interface grouped by tier."""
+    if not HAS_RICH:
+        for i, m in enumerate(models, 1):
+            cur = " ◀ текущая" if m["id"] == current_model else ""
+            print(f"  {i:>2}. {m['name']:<25} {m['id']:<45} {m['tier']}{cur}")
+        return
+
+    tier_config = {
+        "free":  ("🆓", "Бесплатные", "green"),
+        "cheap": ("💰", "Доступные",  "yellow"),
+        "paid":  ("💎", "Премиум",    "magenta"),
+    }
+
+    table = Table(
+        box=box.ROUNDED,
+        border_style="blue",
+        padding=(0, 1),
+        title="[bold white]  Выбор модели [/bold white]",
+        caption="[dim]Введи номер модели, или [bold]/model <id>[/bold] для произвольной[/dim]",
+        caption_justify="center",
+    )
+    table.add_column("#", style="bold", width=3, justify="right")
+    table.add_column("Модель", min_width=22)
+    table.add_column("Контекст", justify="right", style="dim")
+    table.add_column("Тариф", justify="center", width=14)
+
+    prev_tier = None
+    for i, m in enumerate(models, 1):
+        tier = m["tier"]
+        icon, label, color = tier_config.get(tier, ("", tier, "white"))
+
+        if tier != prev_tier and prev_tier is not None:
+            table.add_section()
+        prev_tier = tier
+
+        is_current = m["id"] == current_model
+        name_str = f"[bold green]{m['name']} ◀[/bold green]" if is_current else m["name"]
+        model_link = f"[link=https://openrouter.ai/models/{m['id']}][dim]{m['id']}[/dim][/link]"
+        ctx_str = f"{m['ctx']:,}"
+        tier_str = f"[{color}]{icon} {label}[/{color}]"
+
+        table.add_row(str(i), f"{name_str}\n{model_link}", ctx_str, tier_str)
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+def display_status_panel(
+    model_name: str, profile: str, context_limit: int,
+    human_count: int, ai_count: int, tool_count: int, total: int,
+) -> None:
+    """Display a formatted status panel for /status command."""
+    if not HAS_RICH:
+        print(f"  Профиль: {profile} | Модель: {model_name}")
+        print(f"  Лимит контекста: {context_limit:,} токенов")
+        print(f"  Сообщения: {human_count} user, {ai_count} ai, {tool_count} tools = {total}")
+        return
+
+    pct = 0
+    if context_limit > 0:
+        approx_tokens = total * 150
+        pct = round(100 * approx_tokens / context_limit, 1)
+    bar_len = 20
+    filled = min(int(bar_len * pct / 100), bar_len)
+    bar_color = "green" if pct < 50 else ("yellow" if pct < 80 else "red")
+    bar = f"[{bar_color}]{'█' * filled}{'░' * (bar_len - filled)}[/{bar_color}] [dim]{pct}%[/dim]"
+
+    model_link = f"[link=https://openrouter.ai/models/{model_name}]{model_name}[/link]"
+
+    content = (
+        f"  [dim]Модель:[/dim]    [bold cyan]{model_link}[/bold cyan]\n"
+        f"  [dim]Профиль:[/dim]  [bold]{profile}[/bold]\n"
+        f"  [dim]Контекст:[/dim] [bold]{context_limit:,}[/bold] токенов\n\n"
+        f"  [dim]Сообщения:[/dim]\n"
+        f"    [cyan]👤[/cyan] Пользователь  [bold]{human_count}[/bold]\n"
+        f"    [green]🤖[/green] Ассистент      [bold]{ai_count}[/bold]\n"
+        f"    [magenta]🔧[/magenta] Инструменты    [bold]{tool_count}[/bold]\n"
+        f"    [dim]━━━━━━━━━━━━━━━━━━━━[/dim]\n"
+        f"    [bold]Σ  Всего           {total}[/bold]\n\n"
+        f"  [dim]Заполнение контекста:[/dim] {bar}"
+    )
+    console.print(
+        Panel(
+            content,
+            title="[bold]  Статус сессии [/bold]",
+            border_style="blue",
+            box=box.ROUNDED,
+            padding=(1, 2),
+        )
+    )
+
+
 def print_commands() -> None:
-    commands = [
-        ("Enter", "Продолжить (следующий шаг)"),
-        ("/model", "Выбрать модель (сохраняется)"),
-        ("/balance", "Баланс счёта OpenRouter"),
-        ("/profile [имя]", "Сменить профиль (fast/balanced/quality)"),
-        ("/plan", "Показать текущий план"),
-        ("/status", "Профиль модели и счётчики"),
-        ("/ls [путь]", "Список файлов"),
-        ("/tree [путь]", "Дерево проекта"),
-        ("/versions <файл>", "История версий файла"),
-        ("/rollback <файл>", "Откатить файл"),
-        ("/compact", "Сжать разговор (освободить контекст)"),
-        ("/agent list|use", "Управление под-агентами"),
-        ("/help", "Показать эту справку"),
-        ("/exit", "Выйти из TCA"),
+    _categories = [
+        ("💬 Чат", [
+            ("Enter", "Продолжить (следующий шаг)"),
+            ("[bright_green]![/bright_green]<команда>", "Выполнить команду в терминале"),
+        ]),
+        ("🤖 Модель", [
+            ("/model", "Выбрать модель (сохраняется)"),
+            ("/profile [имя]", "fast / balanced / quality"),
+            ("/balance", "Баланс OpenRouter"),
+        ]),
+        ("📁 Проект", [
+            ("/ls [путь]", "Список файлов"),
+            ("/tree [путь]", "Дерево проекта"),
+            ("/plan", "Текущий план задачи"),
+            ("/status", "Статус сессии"),
+        ]),
+        ("🔄 История", [
+            ("/versions <файл>", "Версии файла"),
+            ("/rollback <файл>", "Откатить файл к предыдущей"),
+            ("/compact", "Сжать контекст"),
+        ]),
+        ("⚙️  Система", [
+            ("/agent list|use", "Управление под-агентами"),
+            ("/help", "Эта справка"),
+            ("/exit", "Выход"),
+        ]),
     ]
     if HAS_RICH:
-        table = Table(box=box.SIMPLE, padding=(0, 2), show_header=False)
-        table.add_column("Команда", style="cyan bold", min_width=22)
+        table = Table(
+            box=box.SIMPLE,
+            padding=(0, 2),
+            show_header=False,
+            show_edge=False,
+        )
+        table.add_column("Команда", min_width=24)
         table.add_column("Описание", style="dim")
-        for cmd, desc in commands:
-            table.add_row(cmd, desc)
-        console.print(table)
+
+        for cat_name, cmds in _categories:
+            table.add_row(f"\n[bold]{cat_name}[/bold]", "")
+            for cmd, desc in cmds:
+                table.add_row(f"  [cyan bold]{cmd}[/cyan bold]", desc)
+
+        console.print(
+            Panel(
+                table,
+                title="[bold]  Справка [/bold]",
+                border_style="blue",
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
     else:
-        for cmd, desc in commands:
-            print(f"  {CYAN}{cmd:<22}{RESET} {desc}")
+        all_cmds = []
+        for _, cmds in _categories:
+            all_cmds.extend(cmds)
+        for cmd, desc in all_cmds:
+            clean = cmd.replace("[bright_green]", "").replace("[/bright_green]", "")
+            print(f"  {CYAN}{clean:<22}{RESET} {desc}")
     print()
 
 

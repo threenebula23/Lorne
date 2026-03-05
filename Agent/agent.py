@@ -42,6 +42,7 @@ try:
         create_code_file, append_code_snippet,
         save_plan, load_plan, update_plan, clear_plan,
         list_file_versions, rollback_file,
+        web_search, web_fetch,
     )
     from .rag import index_documents, get_rag_tool
     from .checkpoint import create_session, delete_session, list_sessions, load_state, save_state
@@ -52,6 +53,7 @@ except ImportError:
         create_code_file, append_code_snippet,
         save_plan, load_plan, update_plan, clear_plan,
         list_file_versions, rollback_file,
+        web_search, web_fetch,
     )
     from Agent.rag import index_documents, get_rag_tool
     from Agent.checkpoint import create_session, delete_session, list_sessions, load_state, save_state
@@ -81,6 +83,7 @@ try:
         section, step, round_header,
         display_agent_action, display_tool_result, display_model_reply,
         display_turn_summary, display_usage, display_cumulative_usage,
+        display_shell_command, display_model_selector, display_status_panel,
         get_context_limit,
         print_welcome, print_commands, print_session_list,
         print_thinking, print_planning, print_info, print_success,
@@ -97,6 +100,9 @@ except ImportError:
     def display_turn_summary(files): pass
     def display_usage(meta, limit=None, prefix="   "): return {}
     def display_cumulative_usage(cum, limit, name=""): pass
+    def display_shell_command(cmd): print(f"  $ {cmd}")
+    def display_model_selector(models, current): pass
+    def display_status_panel(mn, pr, cl, hc, ac, tc, tt): print(f"  {mn} | {pr}")
     def get_context_limit(name): return 128_000
     def print_welcome(m, p, n, b=""): print(f"TCA — {m}" + (f" | {b}" if b else ""))
     def print_commands(): print("  /help, /exit")
@@ -124,6 +130,7 @@ tools = [
     save_plan, load_plan, update_plan, clear_plan,
     list_file_versions, rollback_file,
     search_in_files, run_command, create_pdf, ask_user,
+    web_search, web_fetch,
     get_rag_tool(),
 ]
 
@@ -907,6 +914,17 @@ def run_coding_agent_loop():
             print_commands()
             continue
 
+        if user_input.startswith("!"):
+            cmd = user_input[1:].strip()
+            if not cmd:
+                print_warning("Использование: !<команда>  (например: !ls -la, !git status)")
+                continue
+            display_shell_command(cmd)
+            from Terminal.runner import run_command_safe
+            result = run_command_safe(command=cmd, timeout=60)
+            display_tool_result(0, "run_command", result)
+            continue
+
         if low.startswith("/ls"):
             parts = user_input.split(maxsplit=1)
             p = parts[1].strip() if len(parts) > 1 else "."
@@ -944,10 +962,10 @@ def run_coding_agent_loop():
             human_count = len([m for m in messages if isinstance(m, HumanMessage)])
             ai_count = len([m for m in messages if isinstance(m, AIMessage)])
             tool_count = len([m for m in messages if isinstance(m, ToolMessage)])
-            print_info(f"Профиль: {MODEL_PROFILE} | Модель: {MODEL_NAME}")
-            print_info(f"Лимит контекста: {CONTEXT_LIMIT:,} токенов")
-            print_info(f"Сообщения: {human_count} пользователь, {ai_count} ассистент, {tool_count} инструменты")
-            print_info(f"Всего сообщений: {len(messages)}")
+            display_status_panel(
+                MODEL_NAME, MODEL_PROFILE, CONTEXT_LIMIT,
+                human_count, ai_count, tool_count, len(messages),
+            )
             continue
 
         if low.startswith("/profile"):
@@ -970,30 +988,7 @@ def run_coding_agent_loop():
                 print_success(f"Модель установлена: {MODEL_NAME}")
                 print_info("Выбор сохранён и будет использоваться при следующем запуске")
                 continue
-            if HAS_RICH and console:
-                from rich.table import Table as RTable
-                from rich import box as rbox
-                tbl = RTable(
-                    title="[bold]Доступные модели[/bold]",
-                    box=rbox.SIMPLE,
-                    padding=(0, 1),
-                )
-                tbl.add_column("#", style="bold", width=3)
-                tbl.add_column("Модель", style="cyan")
-                tbl.add_column("ID", style="dim")
-                tbl.add_column("Контекст", justify="right")
-                tbl.add_column("Тип", style="dim")
-                for i, m in enumerate(AVAILABLE_MODELS, 1):
-                    ctx = f"{m['ctx']:,}"
-                    current = " ◀" if m["id"] == MODEL_NAME else ""
-                    tbl.add_row(str(i), m["name"] + current, m["id"], ctx, m["tier"])
-                console.print(tbl)
-            else:
-                print_info("Доступные модели:")
-                for i, m in enumerate(AVAILABLE_MODELS, 1):
-                    cur = " ◀ текущая" if m["id"] == MODEL_NAME else ""
-                    print(f"  {i:>2}. {m['name']:<25} {m['id']:<45} {m['tier']}{cur}")
-            print_info("Введи номер модели, или /model <model_id> для произвольной модели:")
+            display_model_selector(AVAILABLE_MODELS, MODEL_NAME)
             try:
                 choice = get_user_input().strip()
             except (EOFError, KeyboardInterrupt):
