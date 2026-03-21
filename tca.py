@@ -26,10 +26,12 @@ for _arg in sys.argv[1:]:
         _filtered_argv.append(_arg)
 sys.argv = _filtered_argv
 
+_env_agent = _TCA_ROOT / "Agent" / ".env"
 if _env_key:
     os.environ["OPENROUTER_API_KEY"] = _env_key
-
-_env_agent = _TCA_ROOT / "Agent" / ".env"
+    _env_agent.parent.mkdir(parents=True, exist_ok=True)
+    _env_agent.write_text(f"OPENROUTER_API_KEY={_env_key}\n", encoding="utf-8")
+    print("\n  Ключ сохранён в Agent/.env — в следующий раз достаточно: tca\n")
 _env_root = _TCA_ROOT / ".env"
 if _env_agent.exists():
     from dotenv import load_dotenv
