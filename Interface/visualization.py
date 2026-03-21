@@ -444,9 +444,16 @@ def _display_search_result(result: Dict[str, Any]) -> None:
 def display_model_reply(step_num: int, content: str, response_metadata: Optional[Dict[str, Any]] = None) -> None:
     if not content or not content.strip():
         return
+        
+    # Strip thought tags
+    import re as _re
+    clean_content = _re.sub(r"<thought>[\s\S]*?</thought>", "", content).strip()
+    if not clean_content:
+        return
+
     if HAS_RICH:
         try:
-            md = RichMarkdown(content.strip())
+            md = RichMarkdown(clean_content)
             console.print(
                 Panel(
                     md,
@@ -766,6 +773,19 @@ def print_commands() -> None:
             ("/rollback <файл>", "Откатить файл к предыдущей"),
             ("/compact", "Сжать контекст"),
         ]),
+        ("🔧 Custom Tools", [
+            ("/custom", "Список кастомных тулов"),
+            ("/custom add <имя>", "Добавить свой тул"),
+            ("/custom remove <имя>", "Удалить тул"),
+            ("/custom reload", "Перезагрузить тулы"),
+        ]),
+        ("⚡ Creator Mode", [
+            ("/creator", "Включить creator mode"),
+            ("/creator <задача>", "Запустить задачу в creator mode"),
+            ("/creator config", "Конфигурация creator"),
+            ("/creator set <key> <val>", "Изменить настройку"),
+            ("/creator off", "Выключить creator mode"),
+        ]),
         ("⚙️  Система", [
             ("/agent list|use", "Управление под-агентами"),
             ("/help", "Эта справка"),
@@ -829,11 +849,28 @@ def print_session_list(sessions: list) -> None:
             print(f"  {i}) {s.get('title', '')}  (сообщ.={s.get('message_count', 0)}, обновлено={s.get('updated_at', '')})")
 
 
-def print_thinking() -> None:
+def print_thinking(thought: str = "") -> None:
+    if not thought:
+        if HAS_RICH:
+            console.print("[dim]  ⏳ Думаю…[/dim]")
+        else:
+            print("  ⏳ Думаю…")
+        return
+
     if HAS_RICH:
-        console.print("[dim]  ⏳ Думаю…[/dim]")
+        console.print(
+            Panel(
+                Text(thought, style="italic cyan"),
+                title="[bold cyan]🤔 Рассуждение[/bold cyan]",
+                title_align="left",
+                border_style="cyan",
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
     else:
-        print("  ⏳ Думаю…")
+        print(f"\n{CYAN}🤔 Рассуждение:{RESET}")
+        print(f"   {thought}")
 
 
 def print_planning(task: str) -> None:
@@ -882,3 +919,27 @@ def get_user_input() -> str:
             return input(f"{BLUE}❯{RESET} ")
         except (KeyboardInterrupt, EOFError):
             return "/exit"
+
+
+def display_file_diffs(files: List[str]) -> None:
+    """Визуализация списка измененных файлов (как в обычном агенте)."""
+    if not files:
+        return
+        
+    if HAS_RICH:
+        table = Table(
+            title="[bold green]Измененные файлы[/bold green]",
+            box=box.SIMPLE_HEAVY,
+            padding=(0, 1),
+        )
+        table.add_column("Файл", style="bold white")
+        table.add_column("Статус", style="green")
+        
+        for f in sorted(files):
+            table.add_row(f, "✓ Готово")
+            
+        console.print(table)
+    else:
+        print(f"\n{GREEN}Измененные файлы:{RESET}")
+        for f in sorted(files):
+            print(f"  ✓ {f}")

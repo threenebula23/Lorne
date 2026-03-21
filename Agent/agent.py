@@ -29,11 +29,16 @@ except ImportError:
     from system_promt import SYSTEM_PROMPT
 
 try:
-    from .path_utils import resolve_abs_path
+    from .path_utils import resolve_abs_path, set_project_root
 except ImportError:
-    def resolve_abs_path(path_str: str) -> Path:
-        p = Path(path_str).expanduser()
-        return (Path.cwd() / p).resolve() if not p.is_absolute() else p.resolve()
+    try:
+        from Agent.path_utils import resolve_abs_path, set_project_root
+    except ImportError:
+        def resolve_abs_path(path_str: str) -> Path:
+            p = Path(path_str).expanduser()
+            return (Path.cwd() / p).resolve() if not p.is_absolute() else p.resolve()
+        def set_project_root(root: Path | str) -> None:
+            pass
 
 try:
     from .tools import (
@@ -42,7 +47,9 @@ try:
         create_code_file, append_code_snippet,
         save_plan, load_plan, update_plan, clear_plan,
         list_file_versions, rollback_file,
-        web_search, web_fetch,
+        web_search, web_fetch, get_documentation, code_interpreter,
+        load_custom_tools, list_custom_tools, add_custom_tool,
+        remove_custom_tool, get_custom_tools_prompt, reload_custom_tools,
     )
     from .rag import index_documents, get_rag_tool
     from .checkpoint import create_session, delete_session, list_sessions, load_state, save_state
@@ -53,10 +60,22 @@ except ImportError:
         create_code_file, append_code_snippet,
         save_plan, load_plan, update_plan, clear_plan,
         list_file_versions, rollback_file,
-        web_search, web_fetch,
+        web_search, web_fetch, get_documentation, code_interpreter,
+        load_custom_tools, list_custom_tools, add_custom_tool,
+        remove_custom_tool, get_custom_tools_prompt, reload_custom_tools,
     )
     from Agent.rag import index_documents, get_rag_tool
     from Agent.checkpoint import create_session, delete_session, list_sessions, load_state, save_state
+
+try:
+    from .creator_mode import run_creator_mode
+except ImportError:
+    from Agent.creator_mode import run_creator_mode
+
+try:
+    from .creator_provider import get_creator_config, save_creator_config, check_local_server
+except ImportError:
+    from Agent.creator_provider import get_creator_config, save_creator_config, check_local_server
 
 try:
     from .llm_provider import (
@@ -124,15 +143,28 @@ except ImportError:
 load_dotenv()
 
 # ─── Tools ──────────────────────────────────────────────────────────
-tools = [
+_base_tools = [
     read_file, list_files, edit_file, write_file, get_file_line_count,
     create_code_file, append_code_snippet,
     save_plan, load_plan, update_plan, clear_plan,
     list_file_versions, rollback_file,
     search_in_files, run_command, create_pdf, ask_user,
-    web_search, web_fetch,
+    web_search, web_fetch, get_documentation, code_interpreter,
     get_rag_tool(),
 ]
+
+# Загрузить кастомные тулы
+_custom = load_custom_tools()
+tools = _base_tools + _custom
+if _custom:
+    try:
+        from Interface.visualization import print_info as _pi
+        _pi(f"Custom tools: загружено {len(_custom)} тулов")
+    except ImportError:
+        print(f"  Custom tools: загружено {len(_custom)} тулов")
+
+# Флаг creator mode
+_CREATOR_MODE_ACTIVE = False
 
 # ─── Project analysis ──────────────────────────────────────────────
 _SKIP_DIRS = {".git", ".idea", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", ".mypy_cache", ".pytest_cache", "dist", "build", ".next", ".nuxt"}
@@ -428,12 +460,19 @@ def call_model(state: MessagesState) -> Dict[str, List[AIMessage]]:
         return {"messages": [AIMessage(content=error_msg)]}
 
     content = raw_response.content or ""
+    meta = getattr(raw_response, "response_metadata", None) or {}
     if isinstance(content, str):
         content = content.encode("utf-8", "ignore").decode("utf-8", "ignore")
         if is_reasoning_model(MODEL_NAME):
             content = _strip_think_tags(content)
 
-    meta = getattr(raw_response, "response_metadata", None) or {}
+    # Extract Thought for real-time visualization
+    thought = ""
+    thought_match = _re.search(r"<thought>([\s\S]*?)</thought>", content)
+    if thought_match:
+        thought = thought_match.group(1).strip()
+        if thought:
+            print_thinking(thought)
 
     if getattr(raw_response, "tool_calls", None):
         return {"messages": [AIMessage(content=content or "", tool_calls=raw_response.tool_calls, response_metadata=meta)]}
@@ -705,13 +744,69 @@ def compact_conversation(messages: List[Any], keep_last: int = 10) -> List[Any]:
     compacted = system_msgs + [HumanMessage(content=summary_text)] + recent_msgs
     return compacted
 
+def _print_creator_details(creator_result: dict):
+    if not creator_result or not creator_result.get("results"):
+        return
+        
+    if HAS_RICH and console:
+        from rich.panel import Panel as RPanel
+        from rich import box as rbox
+        
+        console.print("\n[bold]Детальные отчеты агентов:[/bold]")
+        for r in creator_result.get("results", []):
+            color = "green" if r["status"] == "done" else "red"
+            icon = "✓" if r["status"] == "done" else "✗"
+            task_title = r.get("task", "")
+            title = f"[{color}]{icon} {r.get('worker_id', 'Unknown')}[/{color}] - {task_title[:60]}"
+            
+            content = str(r.get("result", "Нет данных"))
+            console.print(RPanel(
+                content,
+                title=title,
+                border_style=color,
+                box=rbox.ROUNDED,
+                padding=(1, 2)
+            ))
+            
+        import time
+        from pathlib import Path
+        
+        t_start = time.time() - creator_result.get("elapsed", 0)
+        modified_files = []
+        try:
+            for p in Path.cwd().rglob("*"):
+                if p.is_file() and not any(part.startswith('.') for part in p.parts):
+                    if p.stat().st_mtime > t_start:
+                        try:
+                            modified_files.append(str(p.relative_to(Path.cwd())))
+                        except ValueError:
+                            pass
+        except Exception:
+            pass
+            
+        if modified_files:
+            console.print("\n[bold green]Измененные файлы:[/bold green]")
+            for f in sorted(modified_files):
+                console.print(f"  [dim]-[/dim] {f}")
+    else:
+        print("\nДетальные отчеты агентов:")
+        for r in creator_result.get("results", []):
+            icon = "✓" if r["status"] == "done" else "✗"
+            print(f"\n{icon} {r.get('worker_id', 'Unknown')} - {r.get('task', '')[:60]}")
+            print("-" * 40)
+            print(r.get("result", "Нет данных"))
+            print("-" * 40)
+
 
 # ─── Main loop ──────────────────────────────────────────────────────
 def run_coding_agent_loop():
+    global _CREATOR_MODE_ACTIVE
     print_info("Анализирую структуру проекта…")
     project_structure = analyze_project_structure()
 
+    custom_tools_section = get_custom_tools_prompt()
     enhanced_system_prompt = f"""{SYSTEM_PROMPT}
+{custom_tools_section}
 
 === КОНТЕКСТ ПРОЕКТА ===
 {project_structure}
@@ -726,18 +821,38 @@ def run_coding_agent_loop():
 """
 
     # Session selection
-    sessions = list_sessions(limit=12)
-    if sessions:
-        print_session_list(sessions)
-
-    print_info("Выбери сессию: Enter=новая | номер/ID=продолжить | d номер/ID=удалить")
-    try:
-        choice = get_user_input().strip()
-    except (EOFError, KeyboardInterrupt):
-        choice = ""
-
+    sessions = list_sessions(limit=18)
     session_id = ""
     messages: List[Any] = []
+
+    if sessions:
+        print_session_list(sessions)
+        print_info("Выбери сессию: Enter=новая | номер/ID=продолжить | d номер/ID=удалить")
+        
+        try:
+            from simple_term_menu import TerminalMenu
+            session_options = [" [Новая сессия] "] + [
+                f" {s.get('title', 'без имени')[:40]:<40}  (сообщ.: {s.get('message_count', 0):>2}, {s.get('updated_at', '')}) "
+                for s in sessions
+            ]
+            terminal_menu = TerminalMenu(
+                session_options,
+                title="Выберите сессию (Esc/q для новой):",
+                clear_screen=False,
+            )
+            menu_entry_index = terminal_menu.show()
+            
+            if menu_entry_index is None or menu_entry_index == 0:
+                choice = ""
+            else:
+                choice = str(menu_entry_index)
+        except (ImportError, Exception):
+            try:
+                choice = get_user_input().strip()
+            except (EOFError, KeyboardInterrupt):
+                choice = ""
+    else:
+        choice = ""
 
     if not choice:
         session_id = create_session("new-chat")
@@ -793,6 +908,7 @@ def run_coding_agent_loop():
 
     # RAG indexing
     try:
+        set_project_root(Path.cwd())
         n_rag = index_documents(str(Path.cwd()), pattern="*.py")
         print_info(f"RAG: проиндексировано {n_rag} Python файлов")
     except Exception:
@@ -989,27 +1105,55 @@ def run_coding_agent_loop():
                 print_info("Выбор сохранён и будет использоваться при следующем запуске")
                 continue
             display_model_selector(AVAILABLE_MODELS, MODEL_NAME)
+            
             try:
-                choice = get_user_input().strip()
-            except (EOFError, KeyboardInterrupt):
-                continue
-            if not choice:
-                continue
-            if choice.isdigit():
-                idx = int(choice) - 1
-                if 0 <= idx < len(AVAILABLE_MODELS):
-                    chosen = AVAILABLE_MODELS[idx]["id"]
+                from simple_term_menu import TerminalMenu
+                model_options = [f"{m['name']} ({m['id']})" for m in AVAILABLE_MODELS]
+                # Pre-calculate index of current model
+                current_idx = 0
+                for idx, m in enumerate(AVAILABLE_MODELS):
+                    if m["id"] == MODEL_NAME:
+                        current_idx = idx
+                        break
+                        
+                terminal_menu = TerminalMenu(
+                    model_options, 
+                    title="Выберите модель (Esc для отмены):",
+                    cursor_index=current_idx,
+                    clear_screen=False,
+                )
+                menu_entry_index = terminal_menu.show()
+                
+                if menu_entry_index is not None:
+                    chosen = AVAILABLE_MODELS[menu_entry_index]["id"]
                     set_model(chosen)
                     _init_llm()
                     print_success(f"Модель: {MODEL_NAME}")
                     print_info("Выбор сохранён")
+                continue
+            except (ImportError, Exception):
+                # Fallback to manual selection
+                try:
+                    choice = get_user_input().strip()
+                except (EOFError, KeyboardInterrupt):
+                    continue
+                if not choice:
+                    continue
+                if choice.isdigit():
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(AVAILABLE_MODELS):
+                        chosen = AVAILABLE_MODELS[idx]["id"]
+                        set_model(chosen)
+                        _init_llm()
+                        print_success(f"Модель: {MODEL_NAME}")
+                        print_info("Выбор сохранён")
+                    else:
+                        print_error(f"Неверный номер. Введи 1-{len(AVAILABLE_MODELS)}")
                 else:
-                    print_error(f"Неверный номер. Введи 1-{len(AVAILABLE_MODELS)}")
-            else:
-                set_model(choice)
-                _init_llm()
-                print_success(f"Модель: {MODEL_NAME}")
-                print_info("Выбор сохранён")
+                    set_model(choice)
+                    _init_llm()
+                    print_success(f"Модель: {MODEL_NAME}")
+                    print_info("Выбор сохранён")
             continue
 
         if low.startswith("/balance") or low.startswith("/credits"):
@@ -1087,6 +1231,202 @@ def run_coding_agent_loop():
             print_warning("Использование: /agent list | /agent use <id>")
             continue
 
+        # ─── /custom ─────────────────────────────────────────
+        if low.startswith("/custom"):
+            parts = user_input.split(maxsplit=2)
+            subcmd = parts[1].strip().lower() if len(parts) > 1 else ""
+
+            if not subcmd or subcmd == "list":
+                items = list_custom_tools()
+                if not items:
+                    print_info("Кастомных тулов нет. Добавь: /custom add <имя>")
+                else:
+                    if HAS_RICH and console:
+                        from rich.table import Table as RTable
+                        from rich import box as rbox
+                        table = RTable(
+                            title="[bold]Custom Tools[/bold]",
+                            box=rbox.ROUNDED,
+                            border_style="magenta",
+                            padding=(0, 1),
+                        )
+                        table.add_column("Имя", style="bold cyan")
+                        table.add_column("Описание", style="dim")
+                        for item in items:
+                            table.add_row(item["name"], item["description"])
+                        console.print(table)
+                    else:
+                        print_info("Custom Tools:")
+                        for item in items:
+                            print_info(f"  - {item['name']}: {item['description']}")
+                continue
+
+            if subcmd == "add":
+                tool_name = parts[2].strip() if len(parts) > 2 else ""
+                if not tool_name:
+                    print_warning("Использование: /custom add <имя_тула>")
+                    continue
+                print_info(f"Введи код тула '{tool_name}' (используй @tool декоратор).")
+                print_info("Пустая строка + Enter = завершить ввод. Или Enter сразу = создать шаблон.")
+                code_lines = []
+                while True:
+                    try:
+                        line = input("... ")
+                    except (EOFError, KeyboardInterrupt):
+                        break
+                    if not line and not code_lines:
+                        # Создать шаблон
+                        break
+                    if not line and code_lines:
+                        break
+                    code_lines.append(line)
+                code = "\n".join(code_lines) if code_lines else None
+                result = add_custom_tool(tool_name, code=code)
+                if result.get("ok"):
+                    print_success(f"Тул '{tool_name}' создан: {result.get('path')}")
+                    if result.get("warning"):
+                        print_warning(result["warning"])
+                    # Перезагрузить тулы
+                    _custom_new = reload_custom_tools()
+                    tools.clear()
+                    tools.extend(_base_tools + _custom_new)
+                    print_info(f"Тулы перезагружены: {len(tools)} всего")
+                else:
+                    print_error(f"Ошибка: {result.get('error')}")
+                continue
+
+            if subcmd == "remove" or subcmd == "rm":
+                tool_name = parts[2].strip() if len(parts) > 2 else ""
+                if not tool_name:
+                    print_warning("Использование: /custom remove <имя_тула>")
+                    continue
+                result = remove_custom_tool(tool_name)
+                if result.get("ok"):
+                    print_success(f"Тул '{result.get('removed')}' удалён")
+                    _custom_new = reload_custom_tools()
+                    tools.clear()
+                    tools.extend(_base_tools + _custom_new)
+                    print_info(f"Тулы перезагружены: {len(tools)} всего")
+                else:
+                    print_error(f"Ошибка: {result.get('error')}")
+                continue
+
+            if subcmd == "reload":
+                _custom_new = reload_custom_tools()
+                tools.clear()
+                tools.extend(_base_tools + _custom_new)
+                print_success(f"Custom tools перезагружены: {len(_custom_new)} кастомных, {len(tools)} всего")
+                continue
+
+            print_warning("Использование: /custom [list|add|remove|reload]")
+            continue
+
+        # ─── /creator ────────────────────────────────────────
+        if low.startswith("/creator"):
+            parts = user_input.split(maxsplit=1)
+            subcmd = parts[1].strip() if len(parts) > 1 else ""
+            subcmd_low = subcmd.lower()
+
+            if not subcmd or subcmd_low == "on":
+                _CREATOR_MODE_ACTIVE = True
+                print_success("Creator Mode активирован")
+                print_info("Следующие задачи будут выполняться параллельными агентами")
+                creator_cfg = get_creator_config()
+                print_info(f"  Локальная модель: {creator_cfg['local_model']}")
+                print_info(f"  Сервер: {creator_cfg['local_base_url']}")
+                print_info(f"  Макс. воркеров: {creator_cfg['max_workers']}")
+                local_ok = check_local_server(creator_cfg['local_base_url'])
+                if local_ok:
+                    print_success("  Локальный сервер: доступен ✓")
+                else:
+                    print_warning("  Локальный сервер: недоступен (будет fallback на heavy)")
+                continue
+
+            if subcmd_low == "off":
+                _CREATOR_MODE_ACTIVE = False
+                print_info("Creator Mode деактивирован")
+                continue
+
+            if subcmd_low == "config":
+                creator_cfg = get_creator_config()
+                if HAS_RICH and console:
+                    from rich.panel import Panel as CPanel
+                    from rich import box as rbox
+                    local_ok = check_local_server(creator_cfg['local_base_url'])
+                    status_str = "[green]✓ доступен[/green]" if local_ok else "[red]✗ недоступен[/red]"
+                    content = (
+                        f"  [dim]Локальная модель:[/dim]  [bold]{creator_cfg['local_model']}[/bold]\n"
+                        f"  [dim]Сервер:[/dim]           [bold]{creator_cfg['local_base_url']}[/bold]\n"
+                        f"  [dim]Статус:[/dim]           {status_str}\n"
+                        f"  [dim]Макс. воркеров:[/dim]   [bold]{creator_cfg['max_workers']}[/bold]\n"
+                        f"  [dim]Активен:[/dim]          [bold]{'Да' if creator_cfg['enabled'] or _CREATOR_MODE_ACTIVE else 'Нет'}[/bold]"
+                    )
+                    console.print(CPanel(
+                        content,
+                        title="[bold]⚡ Creator Mode — Конфигурация[/bold]",
+                        border_style="magenta",
+                        box=rbox.ROUNDED,
+                        padding=(1, 2),
+                    ))
+                else:
+                    print_info("Creator Mode — Конфигурация:")
+                    for k, v in creator_cfg.items():
+                        print_info(f"  {k}: {v}")
+                continue
+
+            if subcmd_low.startswith("set "):
+                # /creator set local_model qwen3:14b
+                set_parts = subcmd.split(maxsplit=2)
+                if len(set_parts) < 3:
+                    print_warning("Использование: /creator set <параметр> <значение>")
+                    print_info("  Параметры: local_model, local_base_url, max_workers")
+                    continue
+                param = set_parts[1].strip().lower()
+                value = set_parts[2].strip()
+                valid_params = {"local_model", "local_base_url", "max_workers"}
+                if param not in valid_params:
+                    print_warning(f"Неизвестный параметр: {param}. Допустимые: {', '.join(valid_params)}")
+                    continue
+                if param == "max_workers":
+                    try:
+                        value = int(value)
+                    except ValueError:
+                        print_error("max_workers должен быть числом")
+                        continue
+                save_creator_config({param: value})
+                print_success(f"Creator: {param} = {value}")
+                continue
+
+            # /creator <задача> — запустить задачу в creator mode
+            if subcmd:
+                print_info(f"Запуск Creator Mode: {subcmd[:80]}")
+                creator_result = run_creator_mode(
+                    task=subcmd,
+                    tools=tools,
+                    project_context=project_structure,
+                )
+                
+                # Показать детальные отчеты и файлы пользователю
+                _print_creator_details(creator_result)
+
+                # Добавить результаты в контекст
+                summary_parts = [f"Creator Mode выполнил задачу: {subcmd}"]
+                for r in creator_result.get("results", []):
+                    status_icon = "✓" if r["status"] == "done" else "✗"
+                    summary_parts.append(f"  {status_icon} {r['worker_id']}: {r['task'][:60]}")
+                    if r.get("result"):
+                        summary_parts.append(f"    Результат: {r['result']}")
+                summary_text = "\n".join(summary_parts)
+                messages.append(HumanMessage(content=f"[Creator Mode результат]\n{summary_text}"))
+                messages.append(AIMessage(content=summary_text))
+                try:
+                    save_state(messages, session_id=session_id)
+                except Exception:
+                    pass
+                continue
+
+            continue
+
         # Auto-compact if approaching context limit
         non_system_count = len([m for m in messages if not isinstance(m, SystemMessage)])
         if non_system_count > 30:
@@ -1095,6 +1435,32 @@ def run_coding_agent_loop():
 
         if not user_input:
             messages.append(HumanMessage(content="Продолжи, сделай следующий шаг если нужно."))
+        elif _CREATOR_MODE_ACTIVE and _should_autoplan(user_input):
+            # Creator Mode: сложные задачи → параллельные агенты
+            print_info(f"Creator Mode: запуск для задачи…")
+            creator_result = run_creator_mode(
+                task=user_input,
+                tools=tools,
+                project_context=project_structure,
+            )
+            
+            # Показать детальные отчеты и файлы пользователю
+            _print_creator_details(creator_result)
+
+            summary_parts = [f"Creator Mode выполнил задачу: {user_input}"]
+            for r in creator_result.get("results", []):
+                status_icon = "✓" if r["status"] == "done" else "✗"
+                summary_parts.append(f"  {status_icon} {r['worker_id']}: {r['task'][:60]}")
+                if r.get("result"):
+                    summary_parts.append(f"    Результат: {r['result']}")
+            summary_text = "\n".join(summary_parts)
+            messages.append(HumanMessage(content=f"[Creator Mode результат]\n{summary_text}"))
+            messages.append(AIMessage(content=summary_text))
+            try:
+                save_state(messages, session_id=session_id)
+            except Exception:
+                pass
+            continue
         else:
             if _should_autoplan(user_input):
                 print_planning(user_input)

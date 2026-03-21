@@ -26,10 +26,19 @@ def web_search(query: str, max_results: int = 5) -> Dict[str, Any]:
             "hint": "pip install ddgs",
         }
 
+    # Если запрос похож на поиск документации, добавляем ключевые слова
+    docs_keywords = ["docs", "documentation", "api", "reference", "tutorial", "guide"]
+    is_docs_search = any(kw in query.lower() for kw in docs_keywords)
+    
+    refined_query = query
+    if is_docs_search and "site:" not in query:
+        refined_query += " (site:docs.python.org OR site:npmjs.com OR site:github.com)"
+
     try:
-        results = DDGS().text(query, max_results=max_results)
+        results = DDGS().text(refined_query, max_results=max_results)
         return {
             "query": query,
+            "refined_query": refined_query,
             "results": [
                 {
                     "title": r.get("title", ""),

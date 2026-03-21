@@ -18,6 +18,8 @@ except ImportError:
 _PROJECT_ROOT = None
 _RECENT: Dict[str, Dict[str, Any]] = {}
 
+AUTO_CONFIRM = False
+
 
 def _sig(command: str, cwd: str) -> str:
     return f"{(command or '').strip()}|{(cwd or '').strip()}"
@@ -62,6 +64,15 @@ def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[
     cwd — рабочая директория: пустая строка или '.' = текущая директория проекта. Если путь не существует — команда выполнится в текущей директории."""
     from pathlib import Path
     from Terminal.runner import run_command_safe
+    
+    try:
+        from Interface.graph_display import pause_live_display
+    except ImportError:
+        from contextlib import contextmanager
+        @contextmanager
+        def pause_live_display():
+            yield
+
     signature = _sig(command, cwd)
     if _too_soon(signature, window_s=20):
         return {
@@ -80,18 +91,36 @@ def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[
             "reason": "dangerous_command",
         }
 
-    try:
-        ans = input(f"  Разрешить выполнить команду?\n  $ {command}\n  [y/N] > ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        ans = ""
-    if ans not in ("y", "yes", "да", "д"):
-        return {"stdout": "", "stderr": "Команда отменена пользователем.", "returncode": -2, "skipped": True}
+    if AUTO_CONFIRM:
+        ans = "y"
+    else:
+        with pause_live_display():
+            try:
+                import sys
+                if not sys.stdin.isatty():
+                    ans = "eof"
+                else:
+                    ans = input(f"  Разрешить выполнить команду?\n  $ {command}\n  [y/N] > ").strip().lower()
+            except (EOFError, KeyboardInterrupt, RuntimeError):
+                ans = "eof"
+
+    if ans == "eof":
+        return {
+            "stdout": "", 
+            "stderr": "Terminal input unavailable (EOF or not a TTY). You cannot run interactive commands here. DO NOT RETRY THIS COMMAND. Please inform the user or proceed with alternative non-interactive tools (like write_file).", 
+            "returncode": -2, 
+            "skipped": True
+        }
+    elif ans not in ("y", "yes", "да", "д"):
+        return {"stdout": "", "stderr": "Команда отменена пользователем. Пожалуйста, выбери другой путь решения.", "returncode": -2, "skipped": True}
+    
     cwd_str = None
     if cwd.strip():
         resolved = resolve_abs_path(cwd)
         if resolved.exists() and resolved.is_dir():
             cwd_str = str(resolved)
         # иначе cwd_str остаётся None — выполнение в текущей директории
+    
     res = run_command_safe(command=command.strip(), cwd=cwd_str, timeout=timeout_seconds)
     _RECENT[signature] = {"ts": time.time(), "returncode": res.get("returncode")}
     return res
