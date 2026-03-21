@@ -46,7 +46,7 @@ except ImportError:
 
 # ─── Worker Agent ───────────────────────────────────────────────────
 
-_MAX_WORKER_ROUNDS = 15
+_MAX_WORKER_ROUNDS = 100
 
 
 def _build_worker_graph(
