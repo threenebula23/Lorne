@@ -485,7 +485,7 @@ _base_tools: List[Any] = [
 | `Interface/visualization.py` | Вывод в classic-режиме |
 | `Terminal/runner.py` | Shell-команды |
 
-Полная таблица файлов — **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+Полная таблица файлов — **[docs/ARCHITECTURE.md](wiki/ARCHITECTURE.md)**.
 
 ---
 
