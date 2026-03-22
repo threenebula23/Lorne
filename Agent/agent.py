@@ -164,17 +164,32 @@ def analyze_project_structure(root_path: Optional[Path] = None) -> str:
             is_last = idx == len(visible) - 1
             connector = "└── " if is_last else "├── "
             extension = "    " if is_last else "│   "
-            if item.is_dir():
-                total_dirs += 1
-                lines.append(f"{prefix}{connector}{item.name}/")
-                _tree(item, prefix + extension, depth + 1, max_depth)
-            else:
-                total_files += 1
-                suffix = item.suffix or "(no ext)"
-                file_types[suffix] = file_types.get(suffix, 0) + 1
-                size_kb = item.stat().st_size / 1024
-                size_str = f"{size_kb:.1f}KB" if size_kb >= 1 else f"{item.stat().st_size}B"
-                lines.append(f"{prefix}{connector}{item.name} ({size_str})")
+            try:
+                if item.is_dir():
+                    total_dirs += 1
+                    lines.append(f"{prefix}{connector}{item.name}/")
+                    try:
+                        _tree(item, prefix + extension, depth + 1, max_depth)
+                    except OSError:
+                        lines.append(f"{prefix}{extension}    … (каталог недоступен)")
+                else:
+                    try:
+                        st = item.stat()
+                    except OSError:
+                        lines.append(
+                            f"{prefix}{connector}{item.name} (недоступно)",
+                        )
+                        continue
+                    total_files += 1
+                    suffix = item.suffix or "(no ext)"
+                    file_types[suffix] = file_types.get(suffix, 0) + 1
+                    size_kb = st.st_size / 1024
+                    size_str = (
+                        f"{size_kb:.1f}KB" if size_kb >= 1 else f"{st.st_size}B"
+                    )
+                    lines.append(f"{prefix}{connector}{item.name} ({size_str})")
+            except OSError:
+                lines.append(f"{prefix}{connector}{item.name} (недоступно)")
 
     _tree(root_path)
 

@@ -1,120 +1,105 @@
-# TCA Tools Reference
+# Справочник инструментов TCA
 
-Reference for tools available to the TCA agent. The **exact count** depends on build: base tools from `Agent/tool_registry.py`, optional Git/Context7/browser bundles, user **custom tools** (`/custom`), and **agent mode** may add Playwright browser tools — see [ARCHITECTURE.md](./ARCHITECTURE.md) § `tool_registry`.
+Описание инструментов, доступных агенту. **Точное число** зависит от сборки: базовый набор в `Agent/tool_registry.py`, опционально Git / Context7 / браузер, пользовательские инструменты (`/custom`), в режиме агента — инструменты Playwright. Подробнее: [ARCHITECTURE.md](./ARCHITECTURE.md), раздел `tool_registry`.
 
-## File Operations
+## Файлы
 
 ### `read_file(filename, encoding, offset, limit)`
-Read file contents with optional pagination for large files.
-- `filename` (str): Path to file (relative or absolute)
-- `encoding` (str, default="utf-8"): File encoding
-- `offset` (int, default=0): Start line (0-based)
-- `limit` (int, default=0): Number of lines to read (0 = entire file)
+Чтение файла с постраничностью для больших файлов.
+- `filename` — путь
+- `encoding` (по умолчанию `utf-8`)
+- `offset` — с какой строки (с нуля)
+- `limit` — сколько строк (0 = весь файл)
 
 ### `list_files(path, recursive, pattern)`
-List files in a directory.
-- `path` (str): Directory path
-- `recursive` (bool): Traverse subdirectories
-- `pattern` (str): Glob pattern (e.g. `*.py`)
+Список файлов в каталоге.
 
 ### `search_in_files(directory, query, file_pattern, max_files)`
-Full-text search across files.
-- `directory` (str): Root directory
-- `query` (str): Text to search
-- `file_pattern` (str, default="*.py"): Glob filter
-- `max_files` (int, default=50): Max files to scan
+Полнотекстовый поиск по файлам.
 
 ### `edit_file(path, old_str, new_str)`
-Replace first occurrence of `old_str` with `new_str`. If `old_str` is empty, creates/overwrites the file. Automatically creates a version snapshot before editing.
+Замена первого вхождения `old_str` на `new_str`. Пустой `old_str` — создание/перезапись. Перед правкой создаётся снимок версии.
 
 ### `write_file(path, content)`
-Create or overwrite a file. Auto-creates parent directories. Creates a snapshot and Git auto-commit.
+Полная перезапись файла, создание родительских каталогов, снимок и при необходимости git.
 
 ### `create_code_file(filepath, language, code)`
-Create a code file with language-appropriate extension.
+Создание файла с расширением по языку.
 
 ### `append_code_snippet(filepath, snippet, language)`
-Append code to the end of a file.
+Добавление кода в конец файла.
 
 ### `get_file_line_count(path)`
-Return the number of lines in a file.
+Число строк в файле.
 
-## Terminal
+## Терминал
 
 ### `run_command(command, cwd, timeout_seconds)`
-Execute a shell command with user confirmation.
-- `command` (str): Command to execute
-- `cwd` (str): Working directory (empty = project root)
-- `timeout_seconds` (int, default=30): Timeout
+Shell-команда с подтверждением пользователя.
+- `cwd` — рабочая директория (пусто = корень проекта)
+- `timeout_seconds` — таймаут (по умолчанию 30)
 
-Safety: blocks dangerous commands (`rm -rf`, etc.), deduplicates rapid repeated runs.
+Защита: блокировка опасных команд (`rm -rf` и т.д.), дедупликация частых повторов.
 
 ### `code_interpreter(code, timeout)`
-Execute Python code in a subprocess. Useful for calculations and algorithm verification.
+Запуск Python в отдельном процессе.
 
-## Planning
+## Планирование
 
 ### `save_plan(title, steps)`
-Save a task plan. Steps is a list of strings.
+Сохранение плана (шаги — список строк).
 
 ### `load_plan()`
-Load the current plan from `.tca_plan.json`.
+Загрузка плана из `.tca_plan.json`.
 
 ### `update_plan(step_index, status, note)`
-Update step status: `pending` | `in_progress` | `completed` | `blocked`.
+Обновление шага: `pending` | `in_progress` | `completed` | `blocked`.
 
 ### `clear_plan()`
-Delete the current plan.
+Удаление текущего плана.
 
-## Git Integration
+## Git
 
 ### `git_log(path, limit)`
-Show commit history.
-- `path` (str): Filter by file (empty = all commits)
-- `limit` (int, default=15): Max commits
+История коммитов; `path` пустой — по всему репозиторию.
 
 ### `git_diff(commit)`
-Show diff.
-- `commit` (str): Commit hash (empty = current unstaged changes)
+Diff коммита или текущих незакоммиченных изменений.
 
 ### `git_rollback_file(path, commit)`
-Restore a file from a specific commit.
+Восстановление файла из коммита.
 
 ### `git_status()`
-Get current Git status: branch, changed/staged/untracked files.
+Ветка, изменённые / staged / неотслеживаемые файлы.
 
-## Versioning (SQLite)
+## Версионирование (SQLite)
 
 ### `list_file_versions(path, limit)`
-List version snapshots for a file (most recent first).
+Список снимков файла (новые первыми).
 
 ### `rollback_file(path, version_id)`
-Rollback a file to a specific version snapshot or the latest one.
+Откат к снимку или к последнему.
 
-## Web & Documentation
+## Веб и документация
 
 ### `web_search(query, max_results)`
-Search the web via DuckDuckGo.
+Поиск через DuckDuckGo.
 
 ### `web_fetch(url, max_length)`
-Fetch a web page as text.
+Загрузка страницы как текста.
 
 ### `get_documentation(query, library)`
-Search documentation for libraries and APIs.
+Поиск по документации библиотек и API.
 
-## RAG Search
+## RAG
 
 ### `rag_search(query, top_k)`
-Search indexed project documents.
-- Uses semantic chunking (800 chars with 200 char overlap)
-- Python-aware: breaks at function/class boundaries
-- Word-level scoring with phrase bonus
-- Returns chunks with file path, line numbers, and relevance score
+Поиск по индексу проекта: чанки ~800 символов с перекрытием, учёт границ функций/классов в Python, word-level scoring, в ответе путь, строки, оценка.
 
-## Other
+## Прочее
 
 ### `ask_user(question)`
-Ask the user a question via terminal input.
+Вопрос пользователю в терминале (classic).
 
 ### `create_pdf(filepath, title, body)`
-Create a PDF document (falls back to .txt if ReportLab is not installed).
+Создание PDF (при отсутствии ReportLab — fallback в `.txt`).
