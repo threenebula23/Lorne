@@ -1,0 +1,1086 @@
+/* TCA IDE — Dark Purple Theme (default) */
+
+Screen {
+    background: #0D0D0D;
+    color: #E5E7EB;
+}
+
+/* ─── Header / Footer ───────────────────────────── */
+
+Header {
+    background: #1a1a2e;
+    color: #A78BFA;
+    dock: top;
+    height: 1;
+}
+
+#top-bar {
+    dock: top;
+    height: 1;
+    background: #1a1a2e;
+    layout: horizontal;
+    padding: 0;
+}
+
+#app-exit-btn {
+    height: 1;
+    min-width: 8;
+    background: #EF4444;
+    color: #ffffff;
+    text-style: bold;
+    border: none;
+    margin: 0;
+}
+
+#app-exit-btn:hover {
+    background: #DC2626;
+}
+
+#top-model-label {
+    height: 1;
+    color: #A78BFA;
+    padding: 0 1;
+}
+
+#status-bar {
+    background: #1a1a2e;
+    color: #6B7280;
+    dock: bottom;
+    height: 1;
+    padding: 0 1;
+}
+
+/* ─── Main 3-Column Layout ──────────────────────── */
+
+#main {
+    layout: horizontal;
+    height: 1fr;
+}
+
+#col-left {
+    width: 28;
+    min-width: 14;
+    max-width: 50;
+    layout: vertical;
+    border-right: solid #2D2D3D;
+}
+
+#col-center {
+    width: 1fr;
+    min-width: 30;
+    layout: vertical;
+}
+
+#ai-chat {
+    width: 38;
+    min-width: 22;
+    max-width: 60;
+    layout: vertical;
+    border-left: solid #2D2D3D;
+    height: 1fr;
+}
+
+/* ─── Panel Containers ──────────────────────────── */
+
+#file-explorer {
+    height: 2fr;
+    border-bottom: solid #2D2D3D;
+}
+
+#version-control {
+    height: 1fr;
+    min-height: 6;
+}
+
+#code-editor {
+    height: 2fr;
+    border-bottom: solid #2D2D3D;
+}
+
+#terminal-panel {
+    height: 1fr;
+    min-height: 6;
+}
+
+/* ─── TabbedContent Styling ─────────────────────── */
+
+TabbedContent {
+    background: #0D0D0D;
+}
+
+TabPane {
+    background: #0D0D0D;
+    padding: 0;
+}
+
+Tabs {
+    background: #151520;
+    height: 3;
+}
+
+Tab {
+    background: #151520;
+    color: #6B7280;
+    padding: 0 1;
+}
+
+Tab:hover {
+    background: #1a1a2e;
+    color: #A78BFA;
+}
+
+Tab.-active {
+    background: #1a1a2e;
+    color: #A78BFA;
+    text-style: bold;
+}
+
+Underline {
+    color: #8B5CF6;
+}
+
+/* ─── File Explorer ─────────────────────────────── */
+
+#file-tree-header {
+    height: 1;
+    dock: top;
+    layout: horizontal;
+    background: #1a1a2e;
+    padding: 0;
+}
+
+#tree-root-label {
+    width: 1fr;
+    height: 1;
+    color: #A78BFA;
+    text-style: bold;
+}
+
+#btn-refresh {
+    width: 4;
+    height: 1;
+    min-width: 4;
+    background: #2D2D3D;
+    color: #A78BFA;
+    border: none;
+    margin: 0;
+}
+
+#btn-refresh:hover {
+    background: #8B5CF6;
+    color: #ffffff;
+}
+
+.header-btn {
+    width: 4;
+    height: 1;
+    min-width: 4;
+    background: #2D2D3D;
+    border: none;
+    margin: 0;
+}
+
+#file-explorer FilteredDirectoryTree {
+    background: #0D0D0D;
+    padding: 0;
+    scrollbar-color: #8B5CF6;
+    scrollbar-background: #1a1a2e;
+    height: 1fr;
+}
+
+FilteredDirectoryTree > .tree--cursor {
+    background: #8B5CF6 30%;
+    color: #E5E7EB;
+}
+
+FilteredDirectoryTree > .tree--highlight {
+    background: #8B5CF6 15%;
+}
+
+.file-actions {
+    height: 3;
+    dock: bottom;
+    layout: horizontal;
+    background: #151520;
+    padding: 0;
+}
+
+.file-actions Button {
+    height: 3;
+    min-width: 7;
+    background: #2D2D3D;
+    color: #E5E7EB;
+    margin: 0;
+    border: none;
+    text-style: bold;
+}
+
+.file-actions Button:hover {
+    background: #8B5CF6;
+    color: #ffffff;
+}
+
+.file-actions #btn-del {
+    background: #3D2D2D;
+    color: #EF4444;
+}
+
+.file-actions #btn-del:hover {
+    background: #EF4444;
+    color: #ffffff;
+}
+
+.file-actions #btn-run {
+    background: #2D3D2D;
+    color: #10B981;
+}
+
+.file-actions #btn-run:hover {
+    background: #10B981;
+    color: #ffffff;
+}
+
+.file-actions #btn-ctx {
+    background: #2D2D3D;
+    color: #3B82F6;
+}
+
+.file-actions #btn-ctx:hover {
+    background: #3B82F6;
+    color: #ffffff;
+}
+
+#git-staging {
+    padding: 0 1;
+}
+
+#git-staging ListView {
+    height: 1fr;
+    background: #0D0D0D;
+}
+
+#commit-input {
+    margin: 0 0;
+    background: #151520;
+    color: #E5E7EB;
+    border: solid #2D2D3D;
+}
+
+#commit-btn {
+    width: 100%;
+    background: #8B5CF6;
+    color: #ffffff;
+    text-style: bold;
+    margin: 0 0;
+}
+
+#commit-btn:hover {
+    background: #A78BFA;
+}
+
+/* ─── Settings Panel ─────────────────────────────── */
+
+#settings-panel {
+    padding: 1;
+}
+
+#settings-panel Label {
+    color: #A78BFA;
+    margin: 1 0 0 0;
+    text-style: bold;
+}
+
+#settings-panel Select {
+    width: 100%;
+    margin: 0;
+}
+
+/* ─── Code Editor ───────────────────────────────── */
+
+#editor-toolbar {
+    dock: top;
+    height: 1;
+    layout: horizontal;
+    background: #151520;
+    padding: 0;
+}
+
+#editor-toolbar Button {
+    height: 1;
+    min-width: 8;
+    background: #2D2D3D;
+    color: #E5E7EB;
+    border: none;
+    margin: 0;
+}
+
+#editor-run-btn { background: #2D3D2D; color: #10B981; }
+#editor-run-btn:hover { background: #10B981; color: #ffffff; }
+#editor-save-btn:hover { background: #8B5CF6; color: #ffffff; }
+#editor-close-btn { background: #3D2D2D; color: #EF4444; }
+#editor-close-btn:hover { background: #EF4444; color: #ffffff; }
+
+#code-editor TextArea {
+    height: 1fr;
+    background: #0D0D0D;
+}
+
+/* Notebook cells: не растягивать на всю вкладку — высота задаётся в коде */
+#code-editor TextArea.nb-cell-editor {
+    height: auto;
+    min-height: 10;
+    max-height: 150;
+    background: #0D0D0D;
+}
+
+#editor-tabs {
+    background: #0D0D0D;
+}
+
+.editor-empty {
+    content-align: center middle;
+    color: #4B5563;
+    text-style: italic;
+    height: 1fr;
+}
+
+.nb-toolbar {
+    height: 3;
+    dock: top;
+    layout: horizontal;
+    background: #151520;
+    padding: 0 0 0 0;
+    content-align: left middle;
+}
+
+.nb-toolbar Button {
+    min-width: 12;
+    height: 3;
+    margin: 0 1 0 0;
+    background: #2D2D3D;
+    color: #E5E7EB;
+    border: none;
+    text-style: none;
+    content-align: center middle;
+}
+
+.nb-toolbar Button:hover {
+    background: #3D3D52;
+    color: #FFFFFF;
+}
+
+/* ─── Notebook Cells ───────────────────────────── */
+
+.nb-cell-header {
+    height: 1;
+    background: #1a1a2e;
+    padding: 0 1;
+    margin: 1 0 0 0;
+}
+
+.nb-cell-actions {
+    height: 3;
+    layout: horizontal;
+    margin: 0;
+    padding: 0;
+}
+
+.nb-cell-actions Button {
+    margin: 0 1 0 0;
+}
+
+.nb-run-btn {
+    height: 3;
+    min-width: 12;
+    background: #2D3D2D;
+    color: #10B981;
+    border: none;
+}
+
+.nb-run-btn:hover { background: #10B981; color: #ffffff; }
+
+.nb-del-btn {
+    height: 3;
+    min-width: 8;
+    background: #3D2D2D;
+    color: #FCA5A5;
+    border: none;
+}
+
+.nb-del-btn:hover {
+    background: #EF4444;
+    color: #ffffff;
+}
+
+.nb-output {
+    max-height: 10;
+    background: #151520;
+    padding: 0 1;
+    border: solid #2D2D3D;
+}
+
+.nb-markdown {
+    padding: 0 1;
+    color: #E5E7EB;
+}
+
+.nb-raw {
+    padding: 0 1;
+    color: #6B7280;
+}
+
+/* ─── Find/Replace Overlay ──────────────────────── */
+
+#find-overlay {
+    dock: top;
+    height: auto;
+    max-height: 6;
+    background: #1a1a2e;
+    padding: 0 1;
+    border-bottom: solid #8B5CF6;
+    display: none;
+}
+
+#find-overlay.visible {
+    display: block;
+}
+
+#find-overlay Input {
+    width: 1fr;
+    background: #151520;
+    color: #E5E7EB;
+    border: solid #2D2D3D;
+    margin: 0 1 0 0;
+}
+
+#find-overlay Button {
+    min-width: 6;
+    height: 3;
+    background: #2D2D3D;
+    color: #E5E7EB;
+    margin: 0;
+}
+
+#find-overlay Button:hover {
+    background: #8B5CF6;
+}
+
+#find-row, #replace-row {
+    height: 3;
+    layout: horizontal;
+}
+
+/* ─── Autocomplete Overlay ──────────────────────── */
+
+#autocomplete-overlay {
+    display: none;
+    layer: overlay;
+    background: #1a1a2e;
+    border: solid #8B5CF6;
+    max-height: 10;
+    width: 40;
+    padding: 0;
+}
+
+#autocomplete-overlay.visible {
+    display: block;
+}
+
+#autocomplete-overlay ListView {
+    background: #1a1a2e;
+    height: auto;
+    max-height: 10;
+}
+
+#autocomplete-overlay ListItem {
+    padding: 0 1;
+    color: #E5E7EB;
+}
+
+#autocomplete-overlay ListItem:hover {
+    background: #8B5CF6 30%;
+}
+
+/* ─── Terminal Panel ────────────────────────────── */
+
+#term-tab-bar {
+    height: 3;
+    dock: top;
+    background: #151520;
+    layout: horizontal;
+    padding: 0 1;
+}
+
+#term-new-tab {
+    height: 3;
+    min-width: 14;
+    background: #8B5CF6;
+    color: #ffffff;
+    text-style: bold;
+    margin: 0 1 0 0;
+    border: none;
+}
+
+#term-new-tab:hover {
+    background: #A78BFA;
+}
+
+#term-tab-bar Button {
+    height: 3;
+    min-width: 3;
+    background: #2D2D3D;
+    color: #A78BFA;
+    margin: 0 1 0 0;
+}
+
+.term-close-btn {
+    height: 3;
+    min-width: 6;
+    background: #3D2D2D;
+    color: #EF4444;
+}
+
+.term-close-btn:hover {
+    background: #EF4444;
+    color: #ffffff;
+}
+
+#terminal-panel Terminal {
+    height: 1fr;
+    min-height: 6;
+    background: #0D0D0D;
+}
+
+.term-run-output {
+    height: auto;
+    min-height: 5;
+    max-height: 14;
+    background: #0D0D0D;
+    border-top: solid #2D2D3D;
+    padding: 0 1;
+}
+
+.term-fallback {
+    height: 1fr;
+    background: #0D0D0D;
+    padding: 0 1;
+}
+
+.term-fallback RichLog {
+    height: 1fr;
+    background: #0D0D0D;
+}
+
+.term-fallback Input {
+    dock: bottom;
+    background: #151520;
+    color: #E5E7EB;
+    border: solid #2D2D3D;
+}
+
+/* ─── Version Control ───────────────────────────── */
+
+#version-control .branch-bar {
+    height: 3;
+    layout: horizontal;
+    background: #151520;
+    padding: 0 1;
+}
+
+.branch-item {
+    width: 100%;
+    height: 1;
+    min-width: 10;
+    background: #0D0D0D;
+    color: #E5E7EB;
+    text-align: left;
+    border: none;
+    margin: 0;
+}
+
+.branch-item:hover {
+    background: #8B5CF6 30%;
+}
+
+#branch-actions {
+    height: 3;
+    dock: bottom;
+    layout: horizontal;
+    background: #151520;
+}
+
+#version-control Button {
+    min-width: 8;
+    height: 3;
+    background: #2D2D3D;
+    color: #E5E7EB;
+    margin: 0 1 0 0;
+}
+
+#version-control Button:hover {
+    background: #8B5CF6;
+}
+
+#version-control Tree {
+    background: #0D0D0D;
+    height: 1fr;
+    scrollbar-color: #8B5CF6;
+    scrollbar-background: #1a1a2e;
+}
+
+#version-control Tree > .tree--cursor {
+    background: #8B5CF6 30%;
+}
+
+.staging-header {
+    height: 1;
+    background: #1a1a2e;
+    color: #A78BFA;
+    text-style: bold;
+    padding: 0 1;
+    margin: 1 0 0 0;
+}
+
+.stage-checkbox {
+    height: 1;
+    padding: 0 1;
+    color: #E5E7EB;
+}
+
+#hotkeys-display {
+    padding: 0 1;
+    color: #6B7280;
+}
+
+/* ─── AI Chat ───────────────────────────────────── */
+
+#chat-messages {
+    height: 1fr;
+    background: #0D0D0D;
+    padding: 0 1;
+    scrollbar-color: #8B5CF6;
+    scrollbar-background: #1a1a2e;
+}
+
+#chat-input-area {
+    dock: bottom;
+    height: auto;
+    max-height: 12;
+    background: #1a1a2e;
+    padding: 1;
+}
+
+#chat-input {
+    height: 3;
+    background: #151520;
+    color: #E5E7EB;
+    border: solid #2D2D3D;
+    margin: 0 0 1 0;
+}
+
+#chat-controls {
+    layout: horizontal;
+    height: 3;
+    align: left middle;
+}
+
+#model-select {
+    width: 1fr;
+    max-width: 20;
+    height: 3;
+}
+
+#model-select SelectCurrent {
+    background: #151520;
+    color: #A78BFA;
+    border: solid #2D2D3D;
+    height: 3;
+}
+
+#model-select SelectOverlay {
+    background: #1a1a2e;
+    color: #E5E7EB;
+    border: solid #8B5CF6;
+}
+
+#model-select SelectOverlay OptionList {
+    background: #1a1a2e;
+}
+
+#mode-select {
+    width: 10;
+    max-width: 12;
+    height: 3;
+    margin: 0 1;
+}
+
+#mode-select SelectCurrent {
+    background: #151520;
+    color: #A78BFA;
+    border: solid #2D2D3D;
+    height: 3;
+}
+
+#ctx-label {
+    width: 5;
+    height: 3;
+    color: #6B7280;
+    text-align: center;
+    content-align: center middle;
+}
+
+#stop-btn {
+    min-width: 8;
+    height: 3;
+    background: #2D2D3D;
+    color: #6B7280;
+    margin: 0 1;
+    display: none;
+}
+
+#stop-btn.visible {
+    display: block;
+    background: #EF4444;
+    color: #ffffff;
+    text-style: bold;
+}
+
+#stop-btn.visible:hover {
+    background: #DC2626;
+}
+
+#send-btn {
+    min-width: 8;
+    height: 3;
+    background: #8B5CF6;
+    color: #ffffff;
+    text-style: bold;
+}
+
+#send-btn:hover {
+    background: #A78BFA;
+}
+
+/* ─── AI Settings Panel ─────────────────────────── */
+
+#ai-settings {
+    padding: 1;
+}
+
+#ai-settings Input {
+    width: 100%;
+    background: #151520;
+    color: #E5E7EB;
+    border: solid #2D2D3D;
+    margin: 0 0 1 0;
+}
+
+#ai-settings Button {
+    width: 100%;
+    background: #8B5CF6;
+    color: #ffffff;
+    margin: 0 0 1 0;
+}
+
+#ai-settings Label {
+    color: #A78BFA;
+    margin: 1 0 0 0;
+    text-style: bold;
+}
+
+/* ─── Agent Tree / Detail (Creator Mode) ─────────── */
+
+#agents-header {
+    height: 1;
+    background: #1a1a2e;
+    color: #A78BFA;
+    text-style: bold;
+    padding: 0 1;
+}
+
+#agent-detail-header {
+    height: 1;
+    background: #1a1a2e;
+    color: #A78BFA;
+    text-style: bold;
+    padding: 0 1;
+}
+
+#creator-tree {
+    height: 1fr;
+    background: #0D0D0D;
+    scrollbar-color: #8B5CF6;
+    scrollbar-background: #1a1a2e;
+}
+
+#creator-tree > .tree--cursor {
+    background: #8B5CF6 30%;
+}
+
+#agent-detail-log {
+    height: 1fr;
+    background: #0D0D0D;
+    padding: 0 1;
+    border-top: solid #2D2D3D;
+}
+
+/* ─── Scrollbars ────────────────────────────────── */
+
+RichLog {
+    scrollbar-color: #8B5CF6;
+    scrollbar-background: #1a1a2e;
+}
+
+Tree {
+    scrollbar-color: #8B5CF6;
+    scrollbar-background: #1a1a2e;
+}
+
+TextArea {
+    scrollbar-color: #8B5CF6;
+    scrollbar-background: #1a1a2e;
+}
+
+/* ─── Density Variants ─────────────────────────── */
+
+.density-compact TabPane { padding: 0; }
+.density-compact #chat-input-area { padding: 0; }
+.density-compact .file-actions { height: 1; }
+.density-compact .file-actions Button { height: 1; min-width: 5; }
+.density-compact Tabs { height: 1; }
+.density-compact Tab { padding: 0; }
+
+.density-spacious TabPane { padding: 1; }
+.density-spacious #chat-input-area { padding: 1 2; }
+.density-spacious .file-actions { height: 5; }
+.density-spacious .file-actions Button { height: 5; min-width: 10; }
+.density-spacious Tabs { height: 5; }
+
+/* ═══════════════════════════════════════════════════
+   THEME: MONOKAI
+   ═══════════════════════════════════════════════════ */
+
+.theme-monokai Screen { background: #272822; }
+.theme-monokai Header { background: #3E3D32; color: #F8F8F2; }
+.theme-monokai #status-bar { background: #3E3D32; color: #75715E; }
+
+.theme-monokai TabbedContent { background: #272822; }
+.theme-monokai TabPane { background: #272822; }
+.theme-monokai Tabs { background: #3E3D32; }
+.theme-monokai Tab { background: #3E3D32; color: #75715E; }
+.theme-monokai Tab:hover { background: #49483E; color: #F8F8F2; }
+.theme-monokai Tab.-active { background: #49483E; color: #A6E22E; text-style: bold; }
+.theme-monokai Underline { color: #A6E22E; }
+
+.theme-monokai #col-left { border-right: solid #49483E; }
+.theme-monokai #ai-chat { border-left: solid #49483E; }
+.theme-monokai #file-explorer { border-bottom: solid #49483E; }
+.theme-monokai #code-editor { border-bottom: solid #49483E; }
+
+.theme-monokai FilteredDirectoryTree { background: #272822; scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
+.theme-monokai FilteredDirectoryTree > .tree--cursor { background: #49483E; }
+.theme-monokai FilteredDirectoryTree > .tree--highlight { background: #3E3D32; }
+
+.theme-monokai .file-actions { background: #3E3D32; }
+.theme-monokai .file-actions Button { background: #49483E; color: #F8F8F2; }
+.theme-monokai .file-actions Button:hover { background: #A6E22E; color: #272822; }
+.theme-monokai .file-actions #btn-del { background: #49483E; color: #F92672; }
+.theme-monokai .file-actions #btn-del:hover { background: #F92672; color: #ffffff; }
+.theme-monokai .file-actions #btn-run { background: #49483E; color: #A6E22E; }
+.theme-monokai .file-actions #btn-run:hover { background: #A6E22E; color: #272822; }
+.theme-monokai .file-actions #btn-ctx { background: #49483E; color: #66D9EF; }
+.theme-monokai .file-actions #btn-ctx:hover { background: #66D9EF; color: #272822; }
+
+.theme-monokai #chat-messages { background: #272822; scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
+.theme-monokai #chat-input-area { background: #3E3D32; }
+.theme-monokai #chat-input { background: #272822; color: #F8F8F2; border: solid #49483E; }
+.theme-monokai #send-btn { background: #A6E22E; color: #272822; }
+.theme-monokai #send-btn:hover { background: #B8F32E; }
+.theme-monokai #mode-toggle { background: #49483E; color: #F8F8F2; }
+.theme-monokai #mode-toggle.creator-active { background: #A6E22E; color: #272822; }
+.theme-monokai #model-select SelectCurrent { background: #272822; color: #A6E22E; border: solid #49483E; }
+.theme-monokai #stop-btn.visible { background: #F92672; }
+.theme-monokai #stop-btn.visible:hover { background: #E01A62; }
+
+.theme-monokai #term-new-tab { background: #A6E22E; color: #272822; }
+.theme-monokai #term-new-tab:hover { background: #B8F32E; }
+.theme-monokai .term-fallback { background: #272822; }
+.theme-monokai .term-fallback RichLog { background: #272822; }
+.theme-monokai .term-fallback Input { background: #3E3D32; color: #F8F8F2; border: solid #49483E; }
+
+.theme-monokai #code-editor TextArea { background: #272822; }
+.theme-monokai #commit-input { background: #272822; color: #F8F8F2; border: solid #49483E; }
+.theme-monokai #commit-btn { background: #A6E22E; color: #272822; }
+.theme-monokai #commit-btn:hover { background: #B8F32E; }
+
+.theme-monokai #version-control Button { background: #49483E; color: #F8F8F2; }
+.theme-monokai #version-control Button:hover { background: #A6E22E; color: #272822; }
+.theme-monokai #version-control Tree { background: #272822; scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
+.theme-monokai #version-control Tree > .tree--cursor { background: #49483E; }
+
+.theme-monokai #settings-panel Label { color: #A6E22E; }
+.theme-monokai #ai-settings Label { color: #A6E22E; }
+.theme-monokai #ai-settings Button { background: #A6E22E; color: #272822; }
+.theme-monokai #ai-settings Input { background: #272822; color: #F8F8F2; border: solid #49483E; }
+
+.theme-monokai RichLog { scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
+.theme-monokai Tree { scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
+.theme-monokai TextArea { scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
+
+.theme-monokai #creator-tree { background: #272822; scrollbar-color: #A6E22E; }
+.theme-monokai #creator-tree > .tree--cursor { background: #49483E; }
+.theme-monokai #agent-detail-log { background: #272822; border-top: solid #49483E; }
+.theme-monokai #agents-header { background: #3E3D32; color: #A6E22E; }
+.theme-monokai #agent-detail-header { background: #3E3D32; color: #A6E22E; }
+
+/* ═══════════════════════════════════════════════════
+   THEME: GREEN TERMINAL
+   ═══════════════════════════════════════════════════ */
+
+.theme-green Screen { background: #0a0a0a; color: #00ff41; }
+.theme-green Header { background: #0d1f0d; color: #00ff41; }
+.theme-green #status-bar { background: #0d1f0d; color: #00cc33; }
+
+.theme-green TabbedContent { background: #0a0a0a; }
+.theme-green TabPane { background: #0a0a0a; }
+.theme-green Tabs { background: #0d1f0d; }
+.theme-green Tab { background: #0d1f0d; color: #005522; }
+.theme-green Tab:hover { background: #143314; color: #00ff41; }
+.theme-green Tab.-active { background: #143314; color: #00ff41; text-style: bold; }
+.theme-green Underline { color: #00ff41; }
+
+.theme-green #col-left { border-right: solid #143314; }
+.theme-green #ai-chat { border-left: solid #143314; }
+.theme-green #file-explorer { border-bottom: solid #143314; }
+.theme-green #code-editor { border-bottom: solid #143314; }
+
+.theme-green FilteredDirectoryTree { background: #0a0a0a; color: #00ff41; scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
+.theme-green FilteredDirectoryTree > .tree--cursor { background: #143314; color: #00ff41; }
+.theme-green FilteredDirectoryTree > .tree--highlight { background: #0d1f0d; }
+
+.theme-green .file-actions { background: #0d1f0d; }
+.theme-green .file-actions Button { background: #143314; color: #00ff41; }
+.theme-green .file-actions Button:hover { background: #00ff41; color: #0a0a0a; }
+.theme-green .file-actions #btn-del { background: #143314; color: #ff3333; }
+.theme-green .file-actions #btn-del:hover { background: #ff3333; color: #ffffff; }
+.theme-green .file-actions #btn-run { background: #143314; color: #00ff41; }
+.theme-green .file-actions #btn-run:hover { background: #00ff41; color: #0a0a0a; }
+.theme-green .file-actions #btn-ctx { background: #143314; color: #33ff99; }
+.theme-green .file-actions #btn-ctx:hover { background: #33ff99; color: #0a0a0a; }
+
+.theme-green #chat-messages { background: #0a0a0a; scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
+.theme-green #chat-input-area { background: #0d1f0d; }
+.theme-green #chat-input { background: #0a0a0a; color: #00ff41; border: solid #143314; }
+.theme-green #send-btn { background: #00ff41; color: #0a0a0a; }
+.theme-green #send-btn:hover { background: #33ff66; }
+.theme-green #mode-toggle { background: #143314; color: #00ff41; }
+.theme-green #mode-toggle.creator-active { background: #00ff41; color: #0a0a0a; }
+.theme-green #model-select SelectCurrent { background: #0a0a0a; color: #00ff41; border: solid #143314; }
+.theme-green #stop-btn.visible { background: #ff3333; }
+
+.theme-green #term-new-tab { background: #00ff41; color: #0a0a0a; }
+.theme-green #term-new-tab:hover { background: #33ff66; }
+.theme-green .term-fallback { background: #0a0a0a; }
+.theme-green .term-fallback RichLog { background: #0a0a0a; }
+.theme-green .term-fallback Input { background: #0d1f0d; color: #00ff41; border: solid #143314; }
+
+.theme-green #code-editor TextArea { background: #0a0a0a; }
+.theme-green #commit-input { background: #0a0a0a; color: #00ff41; border: solid #143314; }
+.theme-green #commit-btn { background: #00ff41; color: #0a0a0a; }
+.theme-green #commit-btn:hover { background: #33ff66; }
+
+.theme-green #version-control Button { background: #143314; color: #00ff41; }
+.theme-green #version-control Button:hover { background: #00ff41; color: #0a0a0a; }
+.theme-green #version-control Tree { background: #0a0a0a; color: #00ff41; scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
+.theme-green #version-control Tree > .tree--cursor { background: #143314; }
+
+.theme-green #settings-panel Label { color: #00ff41; }
+.theme-green #ai-settings Label { color: #00ff41; }
+.theme-green #ai-settings Button { background: #00ff41; color: #0a0a0a; }
+.theme-green #ai-settings Input { background: #0a0a0a; color: #00ff41; border: solid #143314; }
+
+.theme-green RichLog { scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
+.theme-green Tree { scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
+.theme-green TextArea { scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
+
+.theme-green #creator-tree { background: #0a0a0a; color: #00ff41; scrollbar-color: #00ff41; }
+.theme-green #creator-tree > .tree--cursor { background: #143314; }
+.theme-green #agent-detail-log { background: #0a0a0a; border-top: solid #143314; }
+.theme-green #agents-header { background: #0d1f0d; color: #00ff41; }
+.theme-green #agent-detail-header { background: #0d1f0d; color: #00ff41; }
+
+/* ═══════════════════════════════════════════════════
+   THEME: BLUE OCEAN
+   ═══════════════════════════════════════════════════ */
+
+.theme-blue Screen { background: #0a0e1a; color: #CBD5E1; }
+.theme-blue Header { background: #0f1729; color: #60A5FA; }
+.theme-blue #status-bar { background: #0f1729; color: #475569; }
+
+.theme-blue TabbedContent { background: #0a0e1a; }
+.theme-blue TabPane { background: #0a0e1a; }
+.theme-blue Tabs { background: #0f1729; }
+.theme-blue Tab { background: #0f1729; color: #475569; }
+.theme-blue Tab:hover { background: #1E293B; color: #60A5FA; }
+.theme-blue Tab.-active { background: #1E293B; color: #60A5FA; text-style: bold; }
+.theme-blue Underline { color: #3B82F6; }
+
+.theme-blue #col-left { border-right: solid #1E293B; }
+.theme-blue #ai-chat { border-left: solid #1E293B; }
+.theme-blue #file-explorer { border-bottom: solid #1E293B; }
+.theme-blue #code-editor { border-bottom: solid #1E293B; }
+
+.theme-blue FilteredDirectoryTree { background: #0a0e1a; scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
+.theme-blue FilteredDirectoryTree > .tree--cursor { background: #1E293B; color: #CBD5E1; }
+.theme-blue FilteredDirectoryTree > .tree--highlight { background: #0f1729; }
+
+.theme-blue .file-actions { background: #0f1729; }
+.theme-blue .file-actions Button { background: #1E293B; color: #CBD5E1; }
+.theme-blue .file-actions Button:hover { background: #3B82F6; color: #ffffff; }
+.theme-blue .file-actions #btn-del { background: #1E293B; color: #F87171; }
+.theme-blue .file-actions #btn-del:hover { background: #EF4444; color: #ffffff; }
+.theme-blue .file-actions #btn-run { background: #1E293B; color: #34D399; }
+.theme-blue .file-actions #btn-run:hover { background: #10B981; color: #ffffff; }
+.theme-blue .file-actions #btn-ctx { background: #1E293B; color: #60A5FA; }
+.theme-blue .file-actions #btn-ctx:hover { background: #3B82F6; color: #ffffff; }
+
+.theme-blue #chat-messages { background: #0a0e1a; scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
+.theme-blue #chat-input-area { background: #0f1729; }
+.theme-blue #chat-input { background: #0a0e1a; color: #CBD5E1; border: solid #1E293B; }
+.theme-blue #send-btn { background: #3B82F6; color: #ffffff; }
+.theme-blue #send-btn:hover { background: #60A5FA; }
+.theme-blue #mode-toggle { background: #1E293B; color: #CBD5E1; }
+.theme-blue #mode-toggle.creator-active { background: #3B82F6; color: #ffffff; }
+.theme-blue #model-select SelectCurrent { background: #0a0e1a; color: #60A5FA; border: solid #1E293B; }
+.theme-blue #stop-btn.visible { background: #EF4444; }
+
+.theme-blue #term-new-tab { background: #3B82F6; color: #ffffff; }
+.theme-blue #term-new-tab:hover { background: #60A5FA; }
+.theme-blue .term-fallback { background: #0a0e1a; }
+.theme-blue .term-fallback RichLog { background: #0a0e1a; }
+.theme-blue .term-fallback Input { background: #0f1729; color: #CBD5E1; border: solid #1E293B; }
+
+.theme-blue #code-editor TextArea { background: #0a0e1a; }
+.theme-blue #commit-input { background: #0a0e1a; color: #CBD5E1; border: solid #1E293B; }
+.theme-blue #commit-btn { background: #3B82F6; color: #ffffff; }
+.theme-blue #commit-btn:hover { background: #60A5FA; }
+
+.theme-blue #version-control Button { background: #1E293B; color: #CBD5E1; }
+.theme-blue #version-control Button:hover { background: #3B82F6; color: #ffffff; }
+.theme-blue #version-control Tree { background: #0a0e1a; scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
+.theme-blue #version-control Tree > .tree--cursor { background: #1E293B; }
+
+.theme-blue #settings-panel Label { color: #60A5FA; }
+.theme-blue #ai-settings Label { color: #60A5FA; }
+.theme-blue #ai-settings Button { background: #3B82F6; color: #ffffff; }
+.theme-blue #ai-settings Input { background: #0a0e1a; color: #CBD5E1; border: solid #1E293B; }
+
+.theme-blue RichLog { scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
+.theme-blue Tree { scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
+.theme-blue TextArea { scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
+
+.theme-blue #creator-tree { background: #0a0e1a; scrollbar-color: #3B82F6; }
+.theme-blue #creator-tree > .tree--cursor { background: #1E293B; }
+.theme-blue #agent-detail-log { background: #0a0e1a; border-top: solid #1E293B; }
+.theme-blue #agents-header { background: #0f1729; color: #60A5FA; }
+.theme-blue #agent-detail-header { background: #0f1729; color: #60A5FA; }

@@ -9,6 +9,7 @@ try:
     from .web_tool import web_search, web_fetch
     from .code_interpreter import code_interpreter
     from .context7_tool import get_documentation
+    from .browser_tool import browser_get_text, browser_screenshot, browser_click_and_get, browser_evaluate
     from .custom_tools import (
         load_custom_tools, list_custom_tools, add_custom_tool,
         remove_custom_tool, get_custom_tools_prompt, reload_custom_tools,
@@ -24,6 +25,7 @@ except ImportError:
     from Agent.tools.web_tool import web_search, web_fetch
     from Agent.tools.code_interpreter import code_interpreter
     from Agent.tools.context7_tool import get_documentation
+    from Agent.tools.browser_tool import browser_get_text, browser_screenshot, browser_click_and_get, browser_evaluate
     from Agent.tools.custom_tools import (
         load_custom_tools, list_custom_tools, add_custom_tool,
         remove_custom_tool, get_custom_tools_prompt, reload_custom_tools,
@@ -37,6 +39,7 @@ __all__ = [
     "list_file_versions", "rollback_file",
     "web_search", "web_fetch",
     "code_interpreter", "get_documentation",
+    "browser_get_text", "browser_screenshot", "browser_click_and_get", "browser_evaluate",
     "load_custom_tools", "list_custom_tools", "add_custom_tool",
     "remove_custom_tool", "get_custom_tools_prompt", "reload_custom_tools",
 ]

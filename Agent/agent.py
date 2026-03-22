@@ -5,14 +5,11 @@ error recovery, and Claude Code-inspired UX.
 """
 import json
 import os
-import re as _re
 import sys
 import time
-import threading
 from dotenv import load_dotenv
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from json_repair import repair_json
 
 _AGENT_ROOT = Path(__file__).resolve().parent
 _PROJECT_ROOT = _AGENT_ROOT.parent
@@ -20,8 +17,6 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langgraph.graph import END, StateGraph, MessagesState
-from langchain_core.tools import BaseTool
 
 try:
     from .system_promt import SYSTEM_PROMPT
@@ -41,31 +36,27 @@ except ImportError:
             pass
 
 try:
-    from .tools import (
-        read_file, list_files, edit_file, search_in_files, write_file,
-        get_file_line_count, run_command, create_pdf, ask_user,
-        create_code_file, append_code_snippet,
-        save_plan, load_plan, update_plan, clear_plan,
-        list_file_versions, rollback_file,
-        web_search, web_fetch, get_documentation, code_interpreter,
-        load_custom_tools, list_custom_tools, add_custom_tool,
-        remove_custom_tool, get_custom_tools_prompt, reload_custom_tools,
+    from .tool_registry import (
+        build_tools, build_tool_map, bind_tools_safe,
+        reload_tools, get_custom_tools_prompt,
     )
-    from .rag import index_documents, get_rag_tool
+    from .rag import index_documents
     from .checkpoint import create_session, delete_session, list_sessions, load_state, save_state
+    from .graph_runner import AgentGraph
+    from .message_utils import sanitize_messages, compact_conversation
+    from .spinner import LiveSpinner
+    from .command_router import CommandRouter, _should_autoplan
 except ImportError:
-    from Agent.tools import (
-        read_file, list_files, edit_file, search_in_files, write_file,
-        get_file_line_count, run_command, create_pdf, ask_user,
-        create_code_file, append_code_snippet,
-        save_plan, load_plan, update_plan, clear_plan,
-        list_file_versions, rollback_file,
-        web_search, web_fetch, get_documentation, code_interpreter,
-        load_custom_tools, list_custom_tools, add_custom_tool,
-        remove_custom_tool, get_custom_tools_prompt, reload_custom_tools,
+    from Agent.tool_registry import (
+        build_tools, build_tool_map, bind_tools_safe,
+        reload_tools, get_custom_tools_prompt,
     )
-    from Agent.rag import index_documents, get_rag_tool
+    from Agent.rag import index_documents
     from Agent.checkpoint import create_session, delete_session, list_sessions, load_state, save_state
+    from Agent.graph_runner import AgentGraph
+    from Agent.message_utils import sanitize_messages, compact_conversation
+    from Agent.spinner import LiveSpinner
+    from Agent.command_router import CommandRouter, _should_autoplan
 
 try:
     from .creator_mode import run_creator_mode
@@ -82,14 +73,14 @@ try:
         get_llm, get_available_profiles, normalize_profile,
         AVAILABLE_MODELS, set_model, get_saved_model,
         fetch_openrouter_credits, format_credits_info,
-        supports_parallel_tool_calls_param, is_reasoning_model,
+        is_reasoning_model,
     )
 except ImportError:
     from Agent.llm_provider import (
         get_llm, get_available_profiles, normalize_profile,
         AVAILABLE_MODELS, set_model, get_saved_model,
         fetch_openrouter_credits, format_credits_info,
-        supports_parallel_tool_calls_param, is_reasoning_model,
+        is_reasoning_model,
     )
 
 try:
@@ -99,10 +90,9 @@ except ImportError:
 
 try:
     from Interface.visualization import (
-        section, step, round_header,
+        section, round_header,
         display_agent_action, display_tool_result, display_model_reply,
         display_turn_summary, display_usage, display_cumulative_usage,
-        display_shell_command, display_model_selector, display_status_panel,
         get_context_limit,
         print_welcome, print_commands, print_session_list,
         print_thinking, print_planning, print_info, print_success,
@@ -111,70 +101,51 @@ try:
     )
 except ImportError:
     def section(title, char="="): print(f"\n--- {title} ---")
-    def step(n, title, detail=""): print(f"  Step {n}: {title}")
     def round_header(n): print(f"\n--- Round {n} ---")
-    def display_agent_action(sn, name, args): step(sn, f"Tool: {name}")
-    def display_tool_result(sn, name, result): step(sn, f"Result: {name}")
+    def display_agent_action(sn, name, args): print(f"  Tool: {name}")
+    def display_tool_result(sn, name, result): print(f"  Result: {name}")
     def display_model_reply(sn, content, meta=None): print(content[:500] if content else "")
     def display_turn_summary(files): pass
     def display_usage(meta, limit=None, prefix="   "): return {}
     def display_cumulative_usage(cum, limit, name=""): pass
-    def display_shell_command(cmd): print(f"  $ {cmd}")
-    def display_model_selector(models, current): pass
-    def display_status_panel(mn, pr, cl, hc, ac, tc, tt): print(f"  {mn} | {pr}")
     def get_context_limit(name): return 128_000
     def print_welcome(m, p, n, b=""): print(f"TCA — {m}" + (f" | {b}" if b else ""))
     def print_commands(): print("  /help, /exit")
     def print_session_list(s): pass
-    def print_thinking(): print("  Thinking…")
+    def print_thinking(t=""): print(f"  Thinking: {t}")
     def print_planning(t): print(f"  Planning: {t}")
     def print_info(m): print(f"  {m}")
     def print_success(m): print(f"  ✓ {m}")
     def print_warning(m): print(f"  ⚠ {m}")
     def print_error(m): print(f"  ✗ {m}")
     def get_user_input():
-        try:
-            return input("> ")
-        except (KeyboardInterrupt, EOFError):
-            return "/exit"
+        try: return input("> ")
+        except (KeyboardInterrupt, EOFError): return "/exit"
     console = None
     HAS_RICH = False
 
 load_dotenv()
 
 # ─── Tools ──────────────────────────────────────────────────────────
-_base_tools = [
-    read_file, list_files, edit_file, write_file, get_file_line_count,
-    create_code_file, append_code_snippet,
-    save_plan, load_plan, update_plan, clear_plan,
-    list_file_versions, rollback_file,
-    search_in_files, run_command, create_pdf, ask_user,
-    web_search, web_fetch, get_documentation, code_interpreter,
-    get_rag_tool(),
-]
+tools, _custom = build_tools()
+_tool_map = build_tool_map(tools)
 
-# Загрузить кастомные тулы
-_custom = load_custom_tools()
-tools = _base_tools + _custom
 if _custom:
-    try:
-        from Interface.visualization import print_info as _pi
-        _pi(f"Custom tools: загружено {len(_custom)} тулов")
-    except ImportError:
-        print(f"  Custom tools: загружено {len(_custom)} тулов")
-
-# Флаг creator mode
-_CREATOR_MODE_ACTIVE = False
+    print_info(f"Custom tools: загружено {len(_custom)} тулов")
 
 # ─── Project analysis ──────────────────────────────────────────────
-_SKIP_DIRS = {".git", ".idea", "__pycache__", "node_modules", ".venv", "venv", "env", ".tox", ".mypy_cache", ".pytest_cache", "dist", "build", ".next", ".nuxt"}
+_SKIP_DIRS = {
+    ".git", ".idea", "__pycache__", "node_modules", ".venv", "venv",
+    "env", ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
+    ".next", ".nuxt",
+}
+
 
 def analyze_project_structure(root_path: Optional[Path] = None) -> str:
     if root_path is None:
         root_path = Path.cwd()
 
     lines = [f"Project: {root_path.name}", f"Root: {root_path}", ""]
-
     file_types: Dict[str, int] = {}
     total_files = 0
     total_dirs = 0
@@ -221,556 +192,61 @@ MODEL_NAME = ""
 CONTEXT_LIMIT = get_context_limit("arcee-ai/trinity-large-preview:free")
 llm = None
 llm_with_tools = None
-
-
-_parallel_tools_disabled = False
-
-
-def _bind_tools_safe(llm_obj: Any, model_name: str, force_no_parallel: bool = False) -> Any:
-    """Bind tools respecting provider capabilities.
-    Only passes parallel_tool_calls=False for providers known to support it
-    (e.g. OpenAI). Other providers (Anthropic via Bedrock, Llama, etc.) may
-    reject the extra key, so we omit it.
-    """
-    use_parallel_flag = (
-        not force_no_parallel
-        and supports_parallel_tool_calls_param(model_name)
-    )
-    try:
-        if use_parallel_flag:
-            return llm_obj.bind_tools(tools, parallel_tool_calls=False)
-        return llm_obj.bind_tools(tools)
-    except TypeError:
-        return llm_obj.bind_tools(tools)
+agent_graph: Optional[AgentGraph] = None
 
 
 def _init_llm(profile: Optional[str] = None) -> None:
-    global llm, llm_with_tools, MODEL_NAME, MODEL_PROFILE, CONTEXT_LIMIT, _parallel_tools_disabled
+    global llm, llm_with_tools, MODEL_NAME, MODEL_PROFILE, CONTEXT_LIMIT, agent_graph
     if profile is None:
         profile = MODEL_PROFILE
     llm_obj, profile_name, model_name = get_llm(profile)
     MODEL_PROFILE = profile_name
     MODEL_NAME = model_name
     CONTEXT_LIMIT = get_context_limit(MODEL_NAME)
-    _parallel_tools_disabled = False
     llm = llm_obj
-    llm_with_tools = _bind_tools_safe(llm_obj, model_name)
+    llm_with_tools = bind_tools_safe(llm_obj, model_name, tools)
+
+    if agent_graph is None:
+        agent_graph = AgentGraph(
+            llm_with_tools=llm_with_tools,
+            llm_raw=llm,
+            tool_map=_tool_map,
+            model_name=MODEL_NAME,
+            is_reasoning=is_reasoning_model(MODEL_NAME),
+            bind_tools_fn=bind_tools_safe,
+            tools_list=tools,
+        )
+    else:
+        agent_graph.rebuild(llm_with_tools, MODEL_NAME, is_reasoning_model(MODEL_NAME))
+        agent_graph.llm_raw = llm
+        agent_graph.tool_map = _tool_map
 
 
 _init_llm(MODEL_PROFILE)
 
 
-# ─── Live spinner for LLM calls ─────────────────────────────────────
-_spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-class _LiveSpinner:
-    """Animated spinner that runs in a background thread during long operations."""
-    def __init__(self, message: str = "Модель думает"):
-        self._message = message
-        self._running = False
-        self._thread = None
-        self._start_time = 0.0
-
-    def start(self):
-        self._running = True
-        self._start_time = time.time()
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=1)
-        elapsed = time.time() - self._start_time
-        # Clear spinner line
-        sys.stdout.write(f"\r\033[K")
-        sys.stdout.flush()
-        if HAS_RICH and console:
-            console.print(f"  [dim]✓ {self._message} ({elapsed:.1f}с)[/dim]")
-        else:
-            print(f"  ✓ {self._message} ({elapsed:.1f}с)")
-
-    def _spin(self):
-        idx = 0
-        while self._running:
-            elapsed = time.time() - self._start_time
-            frame = _spinner_frames[idx % len(_spinner_frames)]
-            if HAS_RICH:
-                line = f"\r  \033[36m{frame}\033[0m \033[1m{self._message}\033[0m \033[2m({elapsed:.0f}с)\033[0m  "
-            else:
-                line = f"\r  {frame} {self._message} ({elapsed:.0f}с)  "
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            idx += 1
-            time.sleep(0.1)
-
-
-# ─── Helpers for provider-compatibility recovery ───────────────────
-
-_RETRIABLE_PATTERNS = [
-    "disable_parallel_tool_use",
-    "parallel_tool_calls",
-    "extraneous key",
-]
-
-
-def _is_retriable_bind_error(exc: Exception) -> bool:
-    """Check if the error is caused by an unsupported bind_tools parameter."""
-    msg = str(exc).lower()
-    return any(p in msg for p in _RETRIABLE_PATTERNS)
-
-
-def _strip_think_tags(text: str) -> str:
-    """Remove <think>…</think> blocks emitted by reasoning models (DeepSeek R1, QwQ)."""
-    return _re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
-
-
-# ─── Message sanitization ──────────────────────────────────────────
-
-def _sanitize_messages(messages: List[Any]) -> List[Any]:
-    """Fix message history to prevent API errors.
-
-    Handles two classes of problems that cause 400 "No tool call found":
-    1. Orphaned ToolMessages — their AIMessage was lost (e.g. compaction/restore)
-    2. Dangling tool_calls — AIMessage has tool_calls but ToolMessages are missing
-       (e.g. interrupted session, partial save)
-    """
-    declared_ids: set = set()
-    answered_ids: set = set()
-
-    for msg in messages:
-        if isinstance(msg, AIMessage):
-            for tc in (getattr(msg, "tool_calls", None) or []):
-                tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
-                if tc_id:
-                    declared_ids.add(tc_id)
-        elif isinstance(msg, ToolMessage):
-            tc_id = getattr(msg, "tool_call_id", "")
-            if tc_id:
-                answered_ids.add(tc_id)
-
-    orphan_ids = answered_ids - declared_ids
-    dangling_ids = declared_ids - answered_ids
-
-    if not orphan_ids and not dangling_ids:
-        return messages
-
-    if orphan_ids:
-        print_warning(f"Удалено {len(orphan_ids)} осиротевших результатов инструментов")
-    if dangling_ids:
-        print_warning(f"Исправлено {len(dangling_ids)} незавершённых вызовов инструментов")
-
-    result: List[Any] = []
-    for msg in messages:
-        if isinstance(msg, ToolMessage):
-            tc_id = getattr(msg, "tool_call_id", "")
-            if tc_id in orphan_ids:
-                continue
-            result.append(msg)
-        elif isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-            tc_ids: set = set()
-            for tc in msg.tool_calls:
-                tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
-                if tc_id:
-                    tc_ids.add(tc_id)
-            dangling_in_msg = tc_ids & dangling_ids
-            if dangling_in_msg:
-                if dangling_in_msg == tc_ids:
-                    content = msg.content or "[Вызов инструментов был прерван]"
-                    result.append(AIMessage(content=content))
-                else:
-                    result.append(msg)
-                    for tc_id in dangling_in_msg:
-                        result.append(ToolMessage(
-                            content="[Операция была прервана]",
-                            tool_call_id=tc_id,
-                        ))
-            else:
-                result.append(msg)
-        else:
-            result.append(msg)
-
-    return result
-
-
-# ─── Transient error retry ─────────────────────────────────────────
-
-_MAX_LLM_RETRIES = 2
-
-_TRANSIENT_PATTERNS = [
-    "provider returned error",
-    "rate limit",
-    "overloaded",
-    "server error",
-    "no tool call found",
-    "trust-request-chat-template",
-    "bad gateway",
-    "service unavailable",
-    "529",
-    "internally_terminated",
-]
-
-
-def _is_transient_error(exc: Exception) -> bool:
-    """Check if the error is a transient provider error that may resolve on retry."""
-    msg = str(exc).lower()
-    return any(p in msg for p in _TRANSIENT_PATTERNS)
-
-
-# ─── LangGraph nodes ───────────────────────────────────────────────
-def call_model(state: MessagesState) -> Dict[str, List[AIMessage]]:
-    global llm_with_tools, _parallel_tools_disabled
-    messages = _sanitize_messages(state["messages"])
-
-    raw_response = None
-    last_error = None
-
-    for attempt in range(_MAX_LLM_RETRIES + 1):
-        spinner = _LiveSpinner("Модель думает")
-        spinner.start()
-        try:
-            raw_response = llm_with_tools.invoke(messages)
-            spinner.stop()
-            last_error = None
-            break
-        except Exception as e:
-            spinner.stop()
-            last_error = e
-
-            if _is_retriable_bind_error(e) and not _parallel_tools_disabled:
-                print_warning("Провайдер не поддерживает parallel_tool_calls — повторяю без него")
-                _parallel_tools_disabled = True
-                llm_with_tools = _bind_tools_safe(llm, MODEL_NAME, force_no_parallel=True)
-                continue
-
-            if _is_transient_error(e) and attempt < _MAX_LLM_RETRIES:
-                wait = (attempt + 1) * 3
-                print_warning(
-                    f"Ошибка провайдера, повтор через {wait}с… "
-                    f"({attempt + 1}/{_MAX_LLM_RETRIES})"
-                )
-                time.sleep(wait)
-                continue
-
-            break
-
-    if last_error is not None:
-        error_msg = f"Ошибка LLM: {type(last_error).__name__}: {last_error}"
-        print_error(error_msg)
-        return {"messages": [AIMessage(content=error_msg)]}
-
-    content = raw_response.content or ""
-    meta = getattr(raw_response, "response_metadata", None) or {}
-    if isinstance(content, str):
-        content = content.encode("utf-8", "ignore").decode("utf-8", "ignore")
-        if is_reasoning_model(MODEL_NAME):
-            content = _strip_think_tags(content)
-
-    # Extract Thought for real-time visualization
-    thought = ""
-    thought_match = _re.search(r"<thought>([\s\S]*?)</thought>", content)
-    if thought_match:
-        thought = thought_match.group(1).strip()
-        if thought:
-            print_thinking(thought)
-
-    if getattr(raw_response, "tool_calls", None):
-        return {"messages": [AIMessage(content=content or "", tool_calls=raw_response.tool_calls, response_metadata=meta)]}
-
-    fixed_content = repair_json(content)
-    if fixed_content.strip():
-        try:
-            parsed = json.loads(fixed_content)
-            parsed_tools = [parsed] if not isinstance(parsed, list) else parsed
-            tool_calls = []
-            for t in parsed_tools:
-                if not isinstance(t, dict) or "function" not in t:
-                    continue
-                func = t["function"]
-                args = func.get("arguments", {})
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {}
-                elif not isinstance(args, dict):
-                    args = {}
-                tool_calls.append({
-                    "name": func["name"],
-                    "args": args,
-                    "id": str(t.get("id", "call_" + str(hash(func["name"])))),
-                    "type": "tool_call",
-                })
-            if tool_calls:
-                return {"messages": [AIMessage(content="", tool_calls=tool_calls, response_metadata=meta)]}
-        except json.JSONDecodeError:
-            pass
-
-    return {"messages": [AIMessage(content=content, response_metadata=meta)]}
-
-
-_TOOL_MAP: Dict[str, BaseTool] = {}
-for _t in tools:
-    name = getattr(_t, "name", None) or getattr(_t, "__name__", None)
-    if name:
-        _TOOL_MAP[str(name)] = _t
-
-
-def _normalize_tool_call(tc: Any) -> Dict[str, Any]:
-    if isinstance(tc, dict):
-        return {"name": tc.get("name") or tc.get("tool") or "", "args": tc.get("args") or {}, "id": tc.get("id") or ""}
-    return {"name": getattr(tc, "name", "") or "", "args": getattr(tc, "args", {}) or {}, "id": getattr(tc, "id", "") or ""}
-
-
-_CONTENT_FIELD_MAP = {
-    "write_file": ("content", {"path"}),
-    "create_code_file": ("code", {"filepath", "language"}),
-    "append_code_snippet": ("snippet", {"filepath", "language"}),
-}
-
-
-def _reconstruct_broken_content(tool_name: str, args: dict) -> dict:
-    """Fix broken tool call args where the LLM failed to JSON-escape multi-line code.
-
-    Small models often break at inner quotes: the content string gets terminated
-    early and subsequent code fragments become spurious JSON keys/values.
-    Pattern: {"path":"x.py","content":"def f():\\n    print(\\"","Hello":"\\")\\n..."}
-    We detect extra unexpected keys and concatenate everything back into the
-    content field.
-    """
-    if tool_name not in _CONTENT_FIELD_MAP:
-        return args
-
-    content_key, known_keys = _CONTENT_FIELD_MAP[tool_name]
-    all_known = known_keys | {content_key}
-    extra_keys = [k for k in args if k not in all_known]
-
-    if not extra_keys:
-        return args
-
-    def _flatten(v: Any) -> str:
-        if isinstance(v, str):
-            return v
-        if isinstance(v, dict):
-            parts: List[str] = []
-            for dk, dv in v.items():
-                parts.append(dk)
-                parts.append(_flatten(dv))
-            return "".join(parts)
-        return str(v)
-
-    parts = [str(args.get(content_key, ""))]
-    for k in extra_keys:
-        parts.append(k)
-        parts.append(_flatten(args[k]))
-
-    new_args = {k: args[k] for k in all_known if k in args}
-    new_args[content_key] = "".join(parts)
-
-    print_warning(
-        f"Восстановлен сломанный JSON для {tool_name}: "
-        f"контент был разбит на {len(extra_keys) + 1} фрагментов, склеен обратно "
-        f"({len(new_args[content_key])} симв.)"
-    )
-    return new_args
-
-
-# ─── Token-saving: truncate large tool results ─────────────────────
-_TOOL_RESULT_LIMITS: Dict[str, int] = {
-    "read_file": 4000,
-    "search_in_files": 3000,
-    "run_command": 3000,
-    "list_files": 2000,
-    "rag_search": 3000,
-}
-_DEFAULT_RESULT_LIMIT = 3000
-
-
-def _truncate_result(tool_name: str, content_str: str) -> str:
-    """Truncate tool result content to save context tokens.
-    The full output is already displayed in the terminal — the model only
-    needs enough to make decisions.
-    """
-    limit = _TOOL_RESULT_LIMITS.get(tool_name, _DEFAULT_RESULT_LIMIT)
-    if len(content_str) <= limit:
-        return content_str
-    half = limit // 2
-    return (
-        content_str[:half]
-        + f"\n\n… [{len(content_str) - limit} символов пропущено для экономии контекста] …\n\n"
-        + content_str[-half:]
-    )
-
-
-def _annotate_errors(tool_name: str, result: Any) -> str:
-    """Add explicit error prefix to tool results so the model cannot ignore failures."""
-    try:
-        content_str = json.dumps(result, ensure_ascii=False, default=str)
-    except Exception:
-        content_str = str(result)
-
-    if not isinstance(result, dict):
-        return _truncate_result(tool_name, content_str)
-
-    has_error = False
-    error_detail = ""
-
-    if result.get("error"):
-        has_error = True
-        error_detail = str(result.get("detail") or result.get("error"))
-    elif result.get("returncode") and int(result.get("returncode", 0)) != 0:
-        has_error = True
-        stderr = result.get("stderr", "")
-        error_detail = stderr[:300] if stderr else f"returncode={result['returncode']}"
-    elif result.get("skipped"):
-        has_error = True
-        error_detail = result.get("reason", "skipped")
-
-    if has_error:
-        content_str = (
-            f"⚠ ОШИБКА при выполнении {tool_name}: {error_detail}\n"
-            f"НЕ отмечай этот шаг как completed. Исправь проблему или попробуй другой подход.\n"
-            f"Полный результат: {content_str}"
-        )
-
-    return _truncate_result(tool_name, content_str)
-
-
-def execute_tools(state: MessagesState) -> Dict[str, List[Any]]:
-    """Execute ALL tool calls from the last AIMessage sequentially."""
-    messages = state["messages"]
-    last = messages[-1]
-    tool_calls = getattr(last, "tool_calls", None) or []
-    if not tool_calls:
-        return {"messages": []}
-
-    results: List[Any] = []
-    for tc in tool_calls:
-        tc_norm = _normalize_tool_call(tc)
-        tool_name = str(tc_norm.get("name") or "")
-        tool_args = tc_norm.get("args") or {}
-        tool_call_id = str(tc_norm.get("id") or f"call_{hash(tool_name)}_{len(results)}")
-
-        tool_args = _reconstruct_broken_content(tool_name, tool_args)
-
-        display_agent_action(len(results) + 1, tool_name, tool_args)
-
-        tool = _TOOL_MAP.get(tool_name)
-        if tool is None:
-            result = {"error": "unknown_tool", "tool": tool_name, "available": list(_TOOL_MAP.keys())}
-        else:
-            try:
-                result = tool.invoke(tool_args)
-            except Exception as e:
-                result = {"error": type(e).__name__, "detail": str(e)}
-
-        parsed = result if isinstance(result, (dict, list)) else str(result)
-        display_tool_result(len(results) + 1, tool_name, parsed)
-
-        content_str = _annotate_errors(tool_name, result)
-        results.append(ToolMessage(content=content_str, tool_call_id=tool_call_id, name=tool_name))
-
-    return {"messages": results}
-
-
-def should_continue(state: MessagesState) -> str:
-    last_message = state["messages"][-1]
-    if last_message.tool_calls:
-        return "tools"
-    return END
-
-
-workflow = StateGraph(state_schema=MessagesState)
-workflow.add_node("agent", call_model)
-workflow.add_node("tools", execute_tools)
-workflow.set_entry_point("agent")
-workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
-workflow.add_edge("tools", "agent")
-app = workflow.compile()
-
-
-# ─── Conversation compaction ────────────────────────────────────────
-def compact_conversation(messages: List[Any], keep_last: int = 10) -> List[Any]:
-    """Summarize old messages to free up context window.
-    Keeps the system message, compacts old exchanges into a summary, keeps recent messages."""
-    if len(messages) <= keep_last + 5:
-        return messages
-
-    system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
-    non_system = [m for m in messages if not isinstance(m, SystemMessage)]
-
-    if len(non_system) <= keep_last:
-        return messages
-
-    split_idx = len(non_system) - keep_last
-
-    # Don't orphan ToolMessages: walk backwards to include the AIMessage
-    # that generated them, keeping the tool call group intact.
-    while split_idx > 0 and isinstance(non_system[split_idx], ToolMessage):
-        split_idx -= 1
-
-    if split_idx <= 0:
-        return messages
-
-    old_msgs = non_system[:split_idx]
-    recent_msgs = non_system[split_idx:]
-
-    summary_parts = []
-    for msg in old_msgs:
-        if isinstance(msg, HumanMessage):
-            text = (msg.content or "").strip()
-            if text:
-                summary_parts.append(f"User: {text[:200]}")
-        elif isinstance(msg, AIMessage):
-            text = (msg.content or "").strip()
-            if text:
-                summary_parts.append(f"Assistant: {text[:200]}")
-            if getattr(msg, "tool_calls", None):
-                for tc in msg.tool_calls:
-                    n = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-                    summary_parts.append(f"  [tool call: {n}]")
-        elif isinstance(msg, ToolMessage):
-            n = getattr(msg, "name", "tool")
-            summary_parts.append(f"  [tool result: {n}]")
-
-    summary_text = (
-        "=== CONVERSATION HISTORY (compacted) ===\n"
-        "The following is a summary of earlier conversation:\n\n"
-        + "\n".join(summary_parts[-40:])
-        + "\n\n=== END OF HISTORY ===\n"
-        "Continue the conversation from here."
-    )
-
-    compacted = system_msgs + [HumanMessage(content=summary_text)] + recent_msgs
-    return compacted
+# ─── Creator Mode details printer ──────────────────────────────────
 
 def _print_creator_details(creator_result: dict):
     if not creator_result or not creator_result.get("results"):
         return
-        
+
     if HAS_RICH and console:
         from rich.panel import Panel as RPanel
         from rich import box as rbox
-        
+
         console.print("\n[bold]Детальные отчеты агентов:[/bold]")
         for r in creator_result.get("results", []):
             color = "green" if r["status"] == "done" else "red"
             icon = "✓" if r["status"] == "done" else "✗"
             task_title = r.get("task", "")
             title = f"[{color}]{icon} {r.get('worker_id', 'Unknown')}[/{color}] - {task_title[:60]}"
-            
             content = str(r.get("result", "Нет данных"))
             console.print(RPanel(
-                content,
-                title=title,
-                border_style=color,
-                box=rbox.ROUNDED,
-                padding=(1, 2)
+                content, title=title, border_style=color,
+                box=rbox.ROUNDED, padding=(1, 2),
             ))
-            
-        import time
-        from pathlib import Path
-        
+
         t_start = time.time() - creator_result.get("elapsed", 0)
         modified_files = []
         try:
@@ -783,7 +259,7 @@ def _print_creator_details(creator_result: dict):
                             pass
         except Exception:
             pass
-            
+
         if modified_files:
             console.print("\n[bold green]Измененные файлы:[/bold green]")
             for f in sorted(modified_files):
@@ -800,7 +276,8 @@ def _print_creator_details(creator_result: dict):
 
 # ─── Main loop ──────────────────────────────────────────────────────
 def run_coding_agent_loop():
-    global _CREATOR_MODE_ACTIVE
+    global MODEL_NAME, MODEL_PROFILE, CONTEXT_LIMIT
+
     print_info("Анализирую структуру проекта…")
     project_structure = analyze_project_structure()
 
@@ -828,7 +305,7 @@ def run_coding_agent_loop():
     if sessions:
         print_session_list(sessions)
         print_info("Выбери сессию: Enter=новая | номер/ID=продолжить | d номер/ID=удалить")
-        
+
         try:
             from simple_term_menu import TerminalMenu
             session_options = [" [Новая сессия] "] + [
@@ -841,7 +318,7 @@ def run_coding_agent_loop():
                 clear_screen=False,
             )
             menu_entry_index = terminal_menu.show()
-            
+
             if menu_entry_index is None or menu_entry_index == 0:
                 choice = ""
             else:
@@ -889,7 +366,7 @@ def run_coding_agent_loop():
                         restored.append(AIMessage(content=d.get("content", "") or "", tool_calls=d.get("tool_calls", [])))
                     elif t == "ToolMessage":
                         restored.append(ToolMessage(content=str(d.get("content", "")), tool_call_id=d.get("tool_call_id", "")))
-                messages = _sanitize_messages(
+                messages = sanitize_messages(
                     [SystemMessage(content=enhanced_system_prompt)] + restored
                 )
                 session_id = target
@@ -906,11 +383,25 @@ def run_coding_agent_loop():
                 messages = [SystemMessage(content=enhanced_system_prompt)]
                 print_warning(f"Сессия не найдена. Новая сессия: {session_id}")
 
-    # RAG indexing
+    # RAG indexing with progress
     try:
         set_project_root(Path.cwd())
-        n_rag = index_documents(str(Path.cwd()), pattern="*.py")
-        print_info(f"RAG: проиндексировано {n_rag} Python файлов")
+        try:
+            from Interface.visualization import display_rag_progress
+            n_rag = index_documents(str(Path.cwd()), pattern="*.py",
+                                    progress_callback=display_rag_progress)
+        except ImportError:
+            n_rag = index_documents(str(Path.cwd()), pattern="*.py")
+        from Agent.rag import get_index_stats
+        stats = get_index_stats()
+        print_info(f"RAG: {stats['chunks']} чанков из {stats['files']} файлов")
+    except Exception:
+        pass
+
+    # Splash screen
+    try:
+        from Interface.splash import show_splash
+        show_splash(MODEL_NAME)
     except Exception:
         pass
 
@@ -931,6 +422,9 @@ def run_coding_agent_loop():
     print_welcome(MODEL_NAME, MODEL_PROFILE, Path.cwd().name, balance_str)
     print_commands()
 
+    # Creator mode flag (mutable list so command_router can toggle it)
+    creator_mode_active = [False]
+
     # ─── Run & render ───────────────────────────────────────────
     def _run_and_render(old_len: int) -> None:
         nonlocal messages
@@ -944,7 +438,7 @@ def run_coding_agent_loop():
 
         printed_len = old_len
         try:
-            for state in app.stream({"messages": messages}, stream_mode="values"):
+            for state in agent_graph.stream({"messages": messages}, stream_mode="values"):
                 messages = state["messages"]
                 chunk = messages[printed_len:]
                 if not chunk:
@@ -952,8 +446,6 @@ def run_coding_agent_loop():
                 for msg in chunk:
                     if isinstance(msg, AIMessage):
                         if msg.tool_calls:
-                            # Show round header; tool calls + results are displayed
-                            # by execute_tools in real-time during execution
                             round_header(round_num)
                             round_num += 1
                             tool_count += len(msg.tool_calls)
@@ -970,8 +462,6 @@ def run_coding_agent_loop():
                             display_model_reply(0, msg.content, None)
 
                     elif isinstance(msg, ToolMessage):
-                        # Track file changes for turn summary
-                        # (display already done by execute_tools)
                         content = msg.content
                         if isinstance(content, str):
                             try:
@@ -1003,448 +493,66 @@ def run_coding_agent_loop():
         except Exception:
             pass
 
-    def _should_autoplan(text: str) -> bool:
-        if not (text or "").strip():
-            return False
-        low = text.lower()
-        skip_patterns = [
-            "привет", "hello", "hi ", "что ты", "кто ты", "who are",
-            "спасибо", "thanks", "ok", "понял", "ладно",
-        ]
-        if any(p in low for p in skip_patterns):
-            return False
-        if len(text.split()) < 4:
-            return False
-        return True
+    # ─── Command router context ─────────────────────────────────
+    cmd_ctx = {
+        "messages": messages,
+        "session_id": session_id,
+        "tools": tools,
+        "model_name": MODEL_NAME,
+        "model_profile": MODEL_PROFILE,
+        "context_limit": CONTEXT_LIMIT,
+        "resolve_abs_path": resolve_abs_path,
+        "analyze_project_structure": analyze_project_structure,
+        "init_llm": _init_llm,
+        "get_available_profiles": get_available_profiles,
+        "AVAILABLE_MODELS": AVAILABLE_MODELS,
+        "set_model": set_model,
+        "fetch_openrouter_credits": fetch_openrouter_credits,
+        "format_credits_info": format_credits_info,
+        "save_state": save_state,
+        "creator_mode_active": creator_mode_active,
+        "get_creator_config": get_creator_config,
+        "save_creator_config": save_creator_config,
+        "check_local_server": check_local_server,
+        "run_creator_mode": run_creator_mode,
+        "project_structure": project_structure,
+        "print_creator_details": _print_creator_details,
+        "run_and_render": _run_and_render,
+        "agent_graph": agent_graph,
+    }
+    router = CommandRouter(cmd_ctx)
 
     # ─── Main input loop ────────────────────────────────────────
     while True:
         user_input = get_user_input().strip()
-        low = user_input.lower()
 
-        if low in ("/exit", "exit", "quit", "q"):
-            print_info("До встречи!")
+        # Keep cmd_ctx in sync with mutable globals
+        cmd_ctx["model_name"] = MODEL_NAME
+        cmd_ctx["model_profile"] = MODEL_PROFILE
+        cmd_ctx["context_limit"] = CONTEXT_LIMIT
+
+        result = router.handle(user_input)
+        if result == "exit":
             break
-
-        if low in ("/help", "help"):
-            print_commands()
-            continue
-
-        if user_input.startswith("!"):
-            cmd = user_input[1:].strip()
-            if not cmd:
-                print_warning("Использование: !<команда>  (например: !ls -la, !git status)")
-                continue
-            display_shell_command(cmd)
-            from Terminal.runner import run_command_safe
-            result = run_command_safe(command=cmd, timeout=60)
-            display_tool_result(0, "run_command", result)
-            continue
-
-        if low.startswith("/ls"):
-            parts = user_input.split(maxsplit=1)
-            p = parts[1].strip() if len(parts) > 1 else "."
-            try:
-                listing = list_files.invoke({"path": p, "recursive": False, "pattern": "*"})
-                entries = listing.get("entries", []) if isinstance(listing, dict) else []
-                display_tool_result(0, "list_files", listing)
-            except Exception as e:
-                print_error(f"/ls: {e}")
-            continue
-
-        if low.startswith("/tree"):
-            parts = user_input.split(maxsplit=1)
-            p = parts[1].strip() if len(parts) > 1 else "."
-            try:
-                root = resolve_abs_path(p)
-                tree = analyze_project_structure(root)
-                if HAS_RICH and console:
-                    from rich.panel import Panel
-                    from rich import box as rbox
-                    console.print(Panel(tree, title="Project Tree", border_style="cyan", box=rbox.ROUNDED))
-                else:
-                    print(tree)
-            except Exception as e:
-                print_error(f"/tree: {e}")
-            continue
-
-        if low.startswith("/plan"):
-            messages.append(HumanMessage(content="Show the current plan using load_plan()."))
-            old_len = len(messages)
-            _run_and_render(old_len)
-            continue
-
-        if low.startswith("/status"):
-            human_count = len([m for m in messages if isinstance(m, HumanMessage)])
-            ai_count = len([m for m in messages if isinstance(m, AIMessage)])
-            tool_count = len([m for m in messages if isinstance(m, ToolMessage)])
-            display_status_panel(
-                MODEL_NAME, MODEL_PROFILE, CONTEXT_LIMIT,
-                human_count, ai_count, tool_count, len(messages),
-            )
-            continue
-
-        if low.startswith("/profile"):
-            parts = user_input.split(maxsplit=1)
-            if len(parts) == 1:
-                print_info(f"Текущий: {MODEL_PROFILE} ({MODEL_NAME})")
-                print_info(f"Доступные: {', '.join(sorted(get_available_profiles().keys()))}")
-                continue
-            new_profile = parts[1].strip()
-            _init_llm(new_profile)
-            print_success(f"Переключено на: {MODEL_PROFILE} ({MODEL_NAME})")
-            continue
-
-        if low.startswith("/model"):
-            parts = user_input.split(maxsplit=1)
-            if len(parts) > 1 and parts[1].strip():
-                custom_model = parts[1].strip()
-                set_model(custom_model)
-                _init_llm()
-                print_success(f"Модель установлена: {MODEL_NAME}")
-                print_info("Выбор сохранён и будет использоваться при следующем запуске")
-                continue
-            display_model_selector(AVAILABLE_MODELS, MODEL_NAME)
-            
-            try:
-                from simple_term_menu import TerminalMenu
-                model_options = [f"{m['name']} ({m['id']})" for m in AVAILABLE_MODELS]
-                # Pre-calculate index of current model
-                current_idx = 0
-                for idx, m in enumerate(AVAILABLE_MODELS):
-                    if m["id"] == MODEL_NAME:
-                        current_idx = idx
-                        break
-                        
-                terminal_menu = TerminalMenu(
-                    model_options, 
-                    title="Выберите модель (Esc для отмены):",
-                    cursor_index=current_idx,
-                    clear_screen=False,
-                )
-                menu_entry_index = terminal_menu.show()
-                
-                if menu_entry_index is not None:
-                    chosen = AVAILABLE_MODELS[menu_entry_index]["id"]
-                    set_model(chosen)
-                    _init_llm()
-                    print_success(f"Модель: {MODEL_NAME}")
-                    print_info("Выбор сохранён")
-                continue
-            except (ImportError, Exception):
-                # Fallback to manual selection
-                try:
-                    choice = get_user_input().strip()
-                except (EOFError, KeyboardInterrupt):
-                    continue
-                if not choice:
-                    continue
-                if choice.isdigit():
-                    idx = int(choice) - 1
-                    if 0 <= idx < len(AVAILABLE_MODELS):
-                        chosen = AVAILABLE_MODELS[idx]["id"]
-                        set_model(chosen)
-                        _init_llm()
-                        print_success(f"Модель: {MODEL_NAME}")
-                        print_info("Выбор сохранён")
-                    else:
-                        print_error(f"Неверный номер. Введи 1-{len(AVAILABLE_MODELS)}")
-                else:
-                    set_model(choice)
-                    _init_llm()
-                    print_success(f"Модель: {MODEL_NAME}")
-                    print_info("Выбор сохранён")
-            continue
-
-        if low.startswith("/balance") or low.startswith("/credits"):
-            print_info("Запрос баланса OpenRouter…")
-            creds = fetch_openrouter_credits()
-            if creds is None:
-                print_error("Не удалось получить данные. Проверь OPENROUTER_API_KEY.")
-            else:
-                info = format_credits_info(creds)
-                if HAS_RICH and console:
-                    from rich.panel import Panel as RPanel
-                    from rich import box as rbox
-                    console.print(RPanel(
-                        info,
-                        title="[bold]OpenRouter — Счёт[/bold]",
-                        border_style="green",
-                        box=rbox.ROUNDED,
-                        padding=(1, 2),
-                    ))
-                else:
-                    print_info("═ OpenRouter — Счёт ═")
-                    for line in info.split("\n"):
-                        print_info(f"  {line}")
-            continue
-
-        if low.startswith("/compact"):
-            before = len(messages)
-            messages = compact_conversation(messages, keep_last=12)
-            after = len(messages)
-            if before != after:
-                print_success(f"Сжато: {before} → {after} сообщений")
-                try:
-                    save_state(messages, session_id=session_id)
-                except Exception:
-                    pass
-            else:
-                print_info("Разговор уже компактный")
-            continue
-
-        if low.startswith("/versions"):
-            parts = user_input.split(maxsplit=1)
-            if len(parts) < 2:
-                print_warning("Использование: /versions <путь>")
-                continue
-            p = parts[1].strip()
-            messages.append(HumanMessage(content=f"Show file versions using list_file_versions(path='{p}')."))
-            old_len = len(messages)
-            _run_and_render(old_len)
-            continue
-
-        if low.startswith("/rollback"):
-            parts = user_input.split()
-            if len(parts) < 2:
-                print_warning("Использование: /rollback <путь> [version_id]")
-                continue
-            p = parts[1].strip()
-            vid = parts[2].strip() if len(parts) >= 3 else ""
-            messages.append(HumanMessage(content=f"Rollback file using rollback_file(path='{p}', version_id='{vid}')."))
-            old_len = len(messages)
-            _run_and_render(old_len)
-            continue
-
-        if low.startswith("/agent"):
-            from Agent.multiagent import list_agents, set_current_agent
-            parts = user_input.split()
-            if len(parts) == 1 or parts[1] == "list":
-                print_info("Под-агенты:")
-                for a in list_agents():
-                    print_info(f"  - {a.get('id')}: {a.get('title')}")
-                continue
-            if parts[1] == "use" and len(parts) >= 3:
-                aid = set_current_agent(parts[2])
-                print_success(f"Текущий под-агент: {aid}")
-                continue
-            print_warning("Использование: /agent list | /agent use <id>")
-            continue
-
-        # ─── /custom ─────────────────────────────────────────
-        if low.startswith("/custom"):
-            parts = user_input.split(maxsplit=2)
-            subcmd = parts[1].strip().lower() if len(parts) > 1 else ""
-
-            if not subcmd or subcmd == "list":
-                items = list_custom_tools()
-                if not items:
-                    print_info("Кастомных тулов нет. Добавь: /custom add <имя>")
-                else:
-                    if HAS_RICH and console:
-                        from rich.table import Table as RTable
-                        from rich import box as rbox
-                        table = RTable(
-                            title="[bold]Custom Tools[/bold]",
-                            box=rbox.ROUNDED,
-                            border_style="magenta",
-                            padding=(0, 1),
-                        )
-                        table.add_column("Имя", style="bold cyan")
-                        table.add_column("Описание", style="dim")
-                        for item in items:
-                            table.add_row(item["name"], item["description"])
-                        console.print(table)
-                    else:
-                        print_info("Custom Tools:")
-                        for item in items:
-                            print_info(f"  - {item['name']}: {item['description']}")
-                continue
-
-            if subcmd == "add":
-                tool_name = parts[2].strip() if len(parts) > 2 else ""
-                if not tool_name:
-                    print_warning("Использование: /custom add <имя_тула>")
-                    continue
-                print_info(f"Введи код тула '{tool_name}' (используй @tool декоратор).")
-                print_info("Пустая строка + Enter = завершить ввод. Или Enter сразу = создать шаблон.")
-                code_lines = []
-                while True:
-                    try:
-                        line = input("... ")
-                    except (EOFError, KeyboardInterrupt):
-                        break
-                    if not line and not code_lines:
-                        # Создать шаблон
-                        break
-                    if not line and code_lines:
-                        break
-                    code_lines.append(line)
-                code = "\n".join(code_lines) if code_lines else None
-                result = add_custom_tool(tool_name, code=code)
-                if result.get("ok"):
-                    print_success(f"Тул '{tool_name}' создан: {result.get('path')}")
-                    if result.get("warning"):
-                        print_warning(result["warning"])
-                    # Перезагрузить тулы
-                    _custom_new = reload_custom_tools()
-                    tools.clear()
-                    tools.extend(_base_tools + _custom_new)
-                    print_info(f"Тулы перезагружены: {len(tools)} всего")
-                else:
-                    print_error(f"Ошибка: {result.get('error')}")
-                continue
-
-            if subcmd == "remove" or subcmd == "rm":
-                tool_name = parts[2].strip() if len(parts) > 2 else ""
-                if not tool_name:
-                    print_warning("Использование: /custom remove <имя_тула>")
-                    continue
-                result = remove_custom_tool(tool_name)
-                if result.get("ok"):
-                    print_success(f"Тул '{result.get('removed')}' удалён")
-                    _custom_new = reload_custom_tools()
-                    tools.clear()
-                    tools.extend(_base_tools + _custom_new)
-                    print_info(f"Тулы перезагружены: {len(tools)} всего")
-                else:
-                    print_error(f"Ошибка: {result.get('error')}")
-                continue
-
-            if subcmd == "reload":
-                _custom_new = reload_custom_tools()
-                tools.clear()
-                tools.extend(_base_tools + _custom_new)
-                print_success(f"Custom tools перезагружены: {len(_custom_new)} кастомных, {len(tools)} всего")
-                continue
-
-            print_warning("Использование: /custom [list|add|remove|reload]")
-            continue
-
-        # ─── /creator ────────────────────────────────────────
-        if low.startswith("/creator"):
-            parts = user_input.split(maxsplit=1)
-            subcmd = parts[1].strip() if len(parts) > 1 else ""
-            subcmd_low = subcmd.lower()
-
-            if not subcmd or subcmd_low == "on":
-                _CREATOR_MODE_ACTIVE = True
-                print_success("Creator Mode активирован")
-                print_info("Следующие задачи будут выполняться параллельными агентами")
-                creator_cfg = get_creator_config()
-                print_info(f"  Локальная модель: {creator_cfg['local_model']}")
-                print_info(f"  Сервер: {creator_cfg['local_base_url']}")
-                print_info(f"  Макс. воркеров: {creator_cfg['max_workers']}")
-                local_ok = check_local_server(creator_cfg['local_base_url'])
-                if local_ok:
-                    print_success("  Локальный сервер: доступен ✓")
-                else:
-                    print_warning("  Локальный сервер: недоступен (будет fallback на heavy)")
-                continue
-
-            if subcmd_low == "off":
-                _CREATOR_MODE_ACTIVE = False
-                print_info("Creator Mode деактивирован")
-                continue
-
-            if subcmd_low == "config":
-                creator_cfg = get_creator_config()
-                if HAS_RICH and console:
-                    from rich.panel import Panel as CPanel
-                    from rich import box as rbox
-                    local_ok = check_local_server(creator_cfg['local_base_url'])
-                    status_str = "[green]✓ доступен[/green]" if local_ok else "[red]✗ недоступен[/red]"
-                    content = (
-                        f"  [dim]Локальная модель:[/dim]  [bold]{creator_cfg['local_model']}[/bold]\n"
-                        f"  [dim]Сервер:[/dim]           [bold]{creator_cfg['local_base_url']}[/bold]\n"
-                        f"  [dim]Статус:[/dim]           {status_str}\n"
-                        f"  [dim]Макс. воркеров:[/dim]   [bold]{creator_cfg['max_workers']}[/bold]\n"
-                        f"  [dim]Активен:[/dim]          [bold]{'Да' if creator_cfg['enabled'] or _CREATOR_MODE_ACTIVE else 'Нет'}[/bold]"
-                    )
-                    console.print(CPanel(
-                        content,
-                        title="[bold]⚡ Creator Mode — Конфигурация[/bold]",
-                        border_style="magenta",
-                        box=rbox.ROUNDED,
-                        padding=(1, 2),
-                    ))
-                else:
-                    print_info("Creator Mode — Конфигурация:")
-                    for k, v in creator_cfg.items():
-                        print_info(f"  {k}: {v}")
-                continue
-
-            if subcmd_low.startswith("set "):
-                # /creator set local_model qwen3:14b
-                set_parts = subcmd.split(maxsplit=2)
-                if len(set_parts) < 3:
-                    print_warning("Использование: /creator set <параметр> <значение>")
-                    print_info("  Параметры: local_model, local_base_url, max_workers")
-                    continue
-                param = set_parts[1].strip().lower()
-                value = set_parts[2].strip()
-                valid_params = {"local_model", "local_base_url", "max_workers"}
-                if param not in valid_params:
-                    print_warning(f"Неизвестный параметр: {param}. Допустимые: {', '.join(valid_params)}")
-                    continue
-                if param == "max_workers":
-                    try:
-                        value = int(value)
-                    except ValueError:
-                        print_error("max_workers должен быть числом")
-                        continue
-                save_creator_config({param: value})
-                print_success(f"Creator: {param} = {value}")
-                continue
-
-            # /creator <задача> — запустить задачу в creator mode
-            if subcmd:
-                print_info(f"Запуск Creator Mode: {subcmd[:80]}")
-                creator_result = run_creator_mode(
-                    task=subcmd,
-                    tools=tools,
-                    project_context=project_structure,
-                )
-                
-                # Показать детальные отчеты и файлы пользователю
-                _print_creator_details(creator_result)
-
-                # Добавить результаты в контекст
-                summary_parts = [f"Creator Mode выполнил задачу: {subcmd}"]
-                for r in creator_result.get("results", []):
-                    status_icon = "✓" if r["status"] == "done" else "✗"
-                    summary_parts.append(f"  {status_icon} {r['worker_id']}: {r['task'][:60]}")
-                    if r.get("result"):
-                        summary_parts.append(f"    Результат: {r['result']}")
-                summary_text = "\n".join(summary_parts)
-                messages.append(HumanMessage(content=f"[Creator Mode результат]\n{summary_text}"))
-                messages.append(AIMessage(content=summary_text))
-                try:
-                    save_state(messages, session_id=session_id)
-                except Exception:
-                    pass
-                continue
-
+        if result is True:
             continue
 
         # Auto-compact if approaching context limit
         non_system_count = len([m for m in messages if not isinstance(m, SystemMessage)])
         if non_system_count > 30:
             messages = compact_conversation(messages, keep_last=10)
+            cmd_ctx["messages"] = messages
             print_info("Авто-сжатие разговора для освобождения контекста")
 
         if not user_input:
             messages.append(HumanMessage(content="Продолжи, сделай следующий шаг если нужно."))
-        elif _CREATOR_MODE_ACTIVE and _should_autoplan(user_input):
-            # Creator Mode: сложные задачи → параллельные агенты
-            print_info(f"Creator Mode: запуск для задачи…")
+        elif creator_mode_active[0] and _should_autoplan(user_input):
+            print_info("Creator Mode: запуск для задачи…")
             creator_result = run_creator_mode(
                 task=user_input,
                 tools=tools,
                 project_context=project_structure,
             )
-            
-            # Показать детальные отчеты и файлы пользователю
             _print_creator_details(creator_result)
 
             summary_parts = [f"Creator Mode выполнил задачу: {user_input}"]
@@ -1464,13 +572,14 @@ def run_coding_agent_loop():
         else:
             if _should_autoplan(user_input):
                 print_planning(user_input)
-                plan_spinner = _LiveSpinner("Составляю план")
+                plan_spinner = LiveSpinner("Составляю план")
                 plan_spinner.start()
                 try:
                     steps = build_plan(user_input)
                     plan_spinner.stop()
                     if steps:
                         try:
+                            from .tool_registry import save_plan, update_plan
                             save_plan.invoke({"title": user_input[:120], "steps": steps})
                             update_plan.invoke({"step_index": 0, "status": "in_progress", "note": ""})
                             print_success(f"План создан: {len(steps)} шагов")
@@ -1502,5 +611,259 @@ def run_coding_agent_loop():
         _run_and_render(old_len)
 
 
+def run_tui_mode():
+    """Launch TCA in full-screen Textual TUI mode."""
+    try:
+        from Interface.tui_app import TCAApp
+        from Interface.tui_bridge import TUIBridge, set_bridge
+    except ImportError as e:
+        print(f"Textual не доступен: {e}")
+        print("Запуск в обычном режиме…")
+        run_coding_agent_loop()
+        return
+
+    import sys
+    import threading
+    import traceback
+
+    load_dotenv()
+    _init_llm(MODEL_PROFILE)
+
+    print_info("Анализирую структуру проекта…")
+    project_structure = analyze_project_structure()
+
+    custom_tools_section = get_custom_tools_prompt()
+    enhanced_system_prompt = f"""{SYSTEM_PROMPT}
+{custom_tools_section}
+
+=== КОНТЕКСТ ПРОЕКТА ===
+{project_structure}
+
+=== ИНСТРУКЦИИ СЕССИИ ===
+Ты знаешь структуру проекта. Используй это для навигации и работы с кодовой базой.
+Используй rag_search для поиска по документам. Используй think() чтобы записывать свои рассуждения.
+"""
+
+    session_id = create_session("tui-session")
+    messages: List[Any] = [SystemMessage(content=enhanced_system_prompt)]
+
+    try:
+        set_project_root(Path.cwd())
+        index_documents(str(Path.cwd()), pattern="*.py")
+    except Exception:
+        pass
+
+    try:
+        from Agent.git_integration import get_git_manager
+        gm = get_git_manager()
+        git_branch = gm.current_branch() if gm.available else ""
+    except Exception:
+        git_branch = ""
+
+    creator_mode_active = [False]
+    tui_agent_mode = ["normal"]
+
+    def _format_creator_summary(cr: Dict[str, Any]) -> str:
+        if not cr:
+            return "Creator mode finished."
+        lines = [
+            f"**Creator mode** — {cr.get('status', '?')} | "
+            f"workers OK: {cr.get('workers_done', 0)}/{cr.get('workers_total', 0)} | "
+            f"{cr.get('elapsed', 0):.1f}s",
+        ]
+        for r in cr.get("results", [])[:24]:
+            wid = r.get("worker_id", "?")
+            st = r.get("status", "?")
+            res = str(r.get("result", ""))[:800]
+            lines.append(f"\n### {wid} ({st})\n{res}")
+        return "\n".join(lines)
+
+    def handle_chat_submit(text: str):
+        """Called from TUI when user sends a chat message (already in bg thread via Textual)."""
+        nonlocal messages
+
+        if not text.strip():
+            text = "Продолжи, сделай следующий шаг если нужно."
+
+        def _do_work():
+            nonlocal messages
+            try:
+                cmd_ctx = {
+                    "messages": messages,
+                    "session_id": session_id,
+                    "tools": tools,
+                    "model_name": MODEL_NAME,
+                    "model_profile": MODEL_PROFILE,
+                    "context_limit": CONTEXT_LIMIT,
+                    "resolve_abs_path": resolve_abs_path,
+                    "analyze_project_structure": analyze_project_structure,
+                    "init_llm": _init_llm,
+                    "get_available_profiles": get_available_profiles,
+                    "AVAILABLE_MODELS": AVAILABLE_MODELS,
+                    "set_model": set_model,
+                    "fetch_openrouter_credits": fetch_openrouter_credits,
+                    "format_credits_info": format_credits_info,
+                    "save_state": save_state,
+                    "creator_mode_active": creator_mode_active,
+                    "get_creator_config": get_creator_config,
+                    "save_creator_config": save_creator_config,
+                    "check_local_server": check_local_server,
+                    "run_creator_mode": run_creator_mode,
+                    "project_structure": project_structure,
+                    "print_creator_details": _print_creator_details,
+                    "run_and_render": lambda old_len: _tui_run(old_len, messages, bridge),
+                    "agent_graph": agent_graph,
+                }
+
+                from Agent.command_router import CommandRouter
+                router = CommandRouter(cmd_ctx)
+                result = router.handle(text)
+
+                if result == "exit":
+                    app.call_from_thread(app.exit)
+                    return
+                if result is True:
+                    return
+
+                mode = (tui_agent_mode[0] or "normal").lower()
+                human_content = text
+                if mode == "research" and not text.strip().lower().startswith("/"):
+                    human_content = (
+                        "[Research mode — use web_search, web_fetch, multiple sources]\n\n"
+                        + text
+                    )
+
+                messages.append(HumanMessage(content=human_content))
+                bridge.on_separator("Round")
+
+                if mode == "creator":
+                    bridge.on_agent_start()
+                    try:
+                        creator_result = run_creator_mode(
+                            task=text,
+                            tools=tools,
+                            project_context=project_structure,
+                        )
+                        summary = _format_creator_summary(creator_result)
+                        bridge.on_model_reply(summary)
+                        messages.append(AIMessage(content=summary))
+                    except Exception as ce:
+                        bridge.on_error(f"Creator error: {ce}")
+                    finally:
+                        bridge.on_agent_done()
+                else:
+                    _tui_run(len(messages), messages, bridge)
+
+            except Exception as e:
+                tb = traceback.format_exc()
+                print(f"[TCA Worker Error] {tb}", file=sys.stderr)
+                try:
+                    bridge.on_error(f"{type(e).__name__}: {e}")
+                except Exception:
+                    try:
+                        app.call_from_thread(
+                            app.notify, f"Error: {e}", severity="error"
+                        )
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_do_work, daemon=True).start()
+
+    def _tui_run(old_len, msgs, bridge_ref):
+        bridge_ref.clear_stop()
+        bridge_ref.on_agent_start()
+        try:
+            cumulative = {"input_tokens": 0, "output_tokens": 0}
+            for state in agent_graph.stream({"messages": msgs}, stream_mode="values"):
+                if bridge_ref.is_stop_requested():
+                    bridge_ref.on_warning("Agent stopped by user")
+                    break
+                msgs.clear()
+                msgs.extend(state["messages"])
+                new_msgs = msgs[old_len:]
+                for msg in new_msgs:
+                    if isinstance(msg, AIMessage):
+                        meta = getattr(msg, "response_metadata", {}) or {}
+                        usage = meta.get("usage", meta.get("token_usage", {}))
+                        if isinstance(usage, dict):
+                            inp = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+                            out = usage.get("completion_tokens", usage.get("output_tokens", 0))
+                            cumulative["input_tokens"] += inp
+                            cumulative["output_tokens"] += out
+                            total_used = cumulative["input_tokens"] + cumulative["output_tokens"]
+                            bridge_ref.on_context_update(total_used, CONTEXT_LIMIT)
+
+                        content = str(msg.content or "").strip()
+                        if content and not getattr(msg, "tool_calls", None):
+                            bridge_ref.on_model_reply(content)
+                old_len = len(msgs)
+        except Exception as e:
+            tb = traceback.format_exc()
+            print(f"[TCA Agent Error] {tb}", file=sys.stderr)
+            bridge_ref.on_error(f"Agent error: {type(e).__name__}: {e}")
+        finally:
+            bridge_ref.on_agent_done()
+
+        try:
+            save_state(msgs, session_id=session_id)
+        except Exception:
+            pass
+
+        bridge_ref.on_status_update(
+            model=MODEL_NAME,
+            branch=git_branch,
+            tokens=f"{len(msgs)} msgs",
+        )
+
+    def handle_model_change(model_id: str):
+        """Called when user changes model in the TUI."""
+        def _work():
+            try:
+                set_model(model_id)
+                _init_llm()
+                bridge.on_success(f"Model: {MODEL_NAME}")
+            except Exception as e:
+                bridge.on_error(f"Model error: {e}")
+        threading.Thread(target=_work, daemon=True).start()
+
+    def handle_mode_toggle(mode: str):
+        """Called when user changes the agent mode."""
+        mode_lower = (mode or "normal").lower() if isinstance(mode, str) else "normal"
+        if mode_lower not in ("normal", "creator", "research", "agent"):
+            mode_lower = "normal"
+        tui_agent_mode[0] = mode_lower
+        creator_mode_active[0] = mode_lower == "creator"
+        try:
+            if mode_lower == "creator":
+                bridge.on_success("Creator mode ON — tasks will be split into sub-agents")
+            elif mode_lower == "research":
+                bridge.on_success("Research mode ON — will use web tools for analysis")
+            elif mode_lower == "agent":
+                bridge.on_success("Agent mode ON — autonomous task execution")
+            else:
+                bridge.on_info(f"Mode: {mode_lower}")
+        except Exception:
+            pass
+
+    app = TCAApp(
+        model_name=MODEL_NAME,
+        branch=git_branch,
+        models=AVAILABLE_MODELS,
+        on_chat_submit=handle_chat_submit,
+        on_model_change=handle_model_change,
+        on_mode_toggle=handle_mode_toggle,
+    )
+    bridge = TUIBridge(app)
+    app.set_bridge(bridge)
+    set_bridge(bridge)
+
+    app.run()
+    set_bridge(None)
+
+
 if __name__ == "__main__":
-    run_coding_agent_loop()
+    mode = os.getenv("TCA_MODE", "tui").lower()
+    if mode == "classic":
+        run_coding_agent_loop()
+    else:
+        run_tui_mode()

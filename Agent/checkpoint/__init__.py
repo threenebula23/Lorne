@@ -5,16 +5,23 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 _DB_PATH: Optional[Path] = None
+_DB_INITIALIZED = False
 
 
 def _db() -> Path:
     global _DB_PATH
     if _DB_PATH is None:
-        _DB_PATH = Path.cwd() / ".tca_checkpoints.sqlite"
+        tca_dir = Path.cwd() / ".tca"
+        tca_dir.mkdir(exist_ok=True)
+        _DB_PATH = tca_dir / "checkpoints.sqlite"
     return _DB_PATH
 
 
 def _init_db() -> None:
+    global _DB_INITIALIZED
+    if _DB_INITIALIZED:
+        return
+
     conn = sqlite3.connect(str(_db()))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS checkpoints (
@@ -31,7 +38,6 @@ def _init_db() -> None:
             updated_at TEXT NOT NULL
         )
     """)
-    # Миграция: если есть checkpoints без sessions — создаём sessions автоматически.
     rows = conn.execute("SELECT session_id, updated_at FROM checkpoints").fetchall()
     for sid, upd in rows:
         exists = conn.execute("SELECT 1 FROM sessions WHERE session_id = ?", (sid,)).fetchone()
@@ -42,6 +48,7 @@ def _init_db() -> None:
             )
     conn.commit()
     conn.close()
+    _DB_INITIALIZED = True
 
 
 def _tool_call_to_dict(tc: Any) -> Dict[str, Any]:

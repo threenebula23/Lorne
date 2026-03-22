@@ -12,7 +12,9 @@ from typing import Any, Dict, List, Optional
 
 
 def _db_path() -> Path:
-    return Path.cwd() / ".tca_versions.sqlite"
+    tca_dir = Path.cwd() / ".tca"
+    tca_dir.mkdir(exist_ok=True)
+    return tca_dir / "versions.sqlite"
 
 
 def _init_db() -> None:

@@ -1,49 +1,173 @@
-"""Context7 documentation tool for TCA agent.
-Optimized search for libraries and framework documentation.
+"""Context7 documentation tool — direct API integration.
+
+Uses Context7 REST API (https://context7.com/api/v2) for library documentation.
+Falls back to DuckDuckGo search if CONTEXT7_API_KEY is not set.
+
+API key: free registration at https://context7.com/dashboard
+Env var: CONTEXT7_API_KEY
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import json
+import os
+import urllib.request
+import urllib.error
+from typing import Any, Dict, List, Optional
+
 from langchain_core.tools import tool
+
+_C7_BASE = "https://context7.com/api/v2"
+_CACHE: Dict[str, Any] = {}
+
+
+def _c7_api_key() -> str:
+    return os.getenv("CONTEXT7_API_KEY", "").strip()
+
+
+def _c7_request(endpoint: str, params: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """Make a request to Context7 API."""
+    key = _c7_api_key()
+    if not key:
+        return None
+
+    query_string = "&".join(f"{k}={urllib.request.quote(str(v))}" for k, v in params.items())
+    url = f"{_C7_BASE}/{endpoint}?{query_string}"
+
+    cache_key = url
+    if cache_key in _CACHE:
+        return _CACHE[cache_key]
+
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+        "User-Agent": "TCA/2.0",
+    }
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            _CACHE[cache_key] = data
+            return data
+    except Exception:
+        return None
+
+
+def _ddgs_fallback(query: str, library: str = "", max_results: int = 3) -> Dict[str, Any]:
+    """Fallback to DuckDuckGo search."""
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        return {"error": "ddgs не установлен, CONTEXT7_API_KEY не задан"}
+
+    search_query = f"{query} documentation"
+    if library:
+        search_query = f"{library} {query} documentation"
+
+    try:
+        results = DDGS().text(search_query, max_results=max_results)
+        return {
+            "source": "ddgs_fallback",
+            "query": query,
+            "library": library,
+            "results": [
+                {"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")}
+                for r in results
+            ],
+            "hint": "Установи CONTEXT7_API_KEY для лучших результатов (бесплатно: context7.com/dashboard)",
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@tool
+def resolve_library(library_name: str) -> Dict[str, Any]:
+    """Найти библиотеку в Context7 по имени. Возвращает Context7 ID для использования в get_library_docs.
+    Примеры: 'react', 'fastapi', 'langchain', 'nextjs'."""
+    data = _c7_request("libs/search", {"query": library_name})
+    if data is None:
+        return _ddgs_fallback(library_name, library_name)
+
+    results = data if isinstance(data, list) else data.get("results", [])
+    formatted = []
+    for r in results[:5]:
+        formatted.append({
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "description": r.get("description", "")[:200],
+            "snippets": r.get("codeSnippetsCount", 0),
+            "trust_score": r.get("trustScore", 0),
+        })
+
+    return {
+        "source": "context7",
+        "query": library_name,
+        "results": formatted,
+        "usage": "Используй ID из результатов с get_library_docs(library_id=..., query=...)",
+    }
+
+
+@tool
+def get_library_docs(library_id: str, query: str, max_tokens: int = 5000) -> Dict[str, Any]:
+    """Получить документацию библиотеки из Context7.
+    library_id — ID из resolve_library (например '/reactjs/react.dev').
+    query — что именно нужно найти (например 'hooks useState useEffect').
+    max_tokens — максимальное число токенов в ответе."""
+    params = {
+        "libraryId": library_id,
+        "query": query,
+    }
+    if max_tokens:
+        params["tokens"] = str(max_tokens)
+
+    data = _c7_request("context", params)
+    if data is None:
+        return _ddgs_fallback(query, library_id.split("/")[-1] if "/" in library_id else library_id)
+
+    context_text = data.get("context", "")
+    sources = data.get("sources", [])
+
+    formatted_sources = []
+    for s in sources[:10]:
+        formatted_sources.append({
+            "title": s.get("title", ""),
+            "url": s.get("url", ""),
+            "segment": s.get("segment", "")[:200],
+        })
+
+    return {
+        "source": "context7",
+        "library_id": library_id,
+        "query": query,
+        "context": context_text[:max_tokens * 4] if context_text else "Документация не найдена",
+        "sources": formatted_sources,
+        "tokens_used": len(context_text.split()),
+    }
 
 
 @tool
 def get_documentation(query: str, library: str = "") -> Dict[str, Any]:
-    """Ищет официальную документацию для библиотек и фреймворков.
-    Используй context7 для получения актуальных паттернов, API и примеров.
-    Аргументы:
-    - query: текст запроса (например, "как создать middleware в FastAPI")
-    - library: название библиотеки (опционально, например, "fastapi", "react")
-    """
-    try:
-        from ddgs import DDGS
-    except ImportError:
-        return {
-            "error": "ddgs не установлен",
-            "hint": "pip install ddgs",
-        }
+    """Ищет документацию для библиотек и фреймворков.
+    Если установлен CONTEXT7_API_KEY — использует Context7 API для точных результатов.
+    Иначе — DuckDuckGo поиск.
+    query — текст запроса, library — название библиотеки (опционально)."""
+    if _c7_api_key() and library:
+        resolve_result = _c7_request("libs/search", {"query": library})
+        if resolve_result:
+            libs = resolve_result if isinstance(resolve_result, list) else resolve_result.get("results", [])
+            if libs:
+                lib_id = libs[0].get("id", "")
+                if lib_id:
+                    docs = _c7_request("context", {"libraryId": lib_id, "query": query, "tokens": "5000"})
+                    if docs:
+                        context_text = docs.get("context", "")
+                        return {
+                            "source": "context7",
+                            "library": library,
+                            "library_id": lib_id,
+                            "query": query,
+                            "context": context_text[:20000] if context_text else "Не найдено",
+                            "sources_count": len(docs.get("sources", [])),
+                        }
 
-    # Специализированный запрос для поиска документации
-    search_query = f"{query} site:docs.python.org OR site:npmjs.com OR site:github.com"
-    if library:
-        search_query = f"{library} {query} documentation"
-    
-    # Также пробуем специализированный поиск по context7 если возможно, 
-    # но пока используем DDGS с фильтрами для имитации качественного поиска
-    try:
-        results = DDGS().text(search_query, max_results=3)
-        return {
-            "query": query,
-            "library": library,
-            "results": [
-                {
-                    "title": r.get("title", ""),
-                    "url": r.get("href", ""),
-                    "snippet": r.get("body", ""),
-                }
-                for r in results
-            ],
-            "note": "Это оптимизированный поиск по документации через провайдер Context7.",
-        }
-    except Exception as e:
-        return {"query": query, "error": type(e).__name__, "detail": str(e)}
+    return _ddgs_fallback(query, library)

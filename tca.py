@@ -61,8 +61,19 @@ def main():
             print(f"Директория не найдена: {target}")
             sys.exit(1)
 
-    from Agent.agent import run_coding_agent_loop
-    run_coding_agent_loop()
+    mode = os.getenv("TCA_MODE", "tui").lower()
+
+    # Check --classic flag
+    if "--classic" in sys.argv:
+        sys.argv.remove("--classic")
+        mode = "classic"
+
+    if mode == "classic":
+        from Agent.agent import run_coding_agent_loop
+        run_coding_agent_loop()
+    else:
+        from Agent.agent import run_tui_mode
+        run_tui_mode()
 
 
 if __name__ == "__main__":

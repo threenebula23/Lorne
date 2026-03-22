@@ -2,16 +2,20 @@
 
 Терминальный ассистент кодинга на базе LLM. Работает в любом проекте прямо из консоли: читает, пишет и редактирует файлы, выполняет команды, строит планы и ведёт историю изменений с возможностью отката. Вдохновлён Claude Code.
 
+**Документация для разработчиков (модули, архитектура):** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/EXTENDING.md](docs/EXTENDING.md) · [docs/TOOLS.md](docs/TOOLS.md) · [docs/README.md](docs/README.md)
+
 ## Возможности
 
-- **Работа с файлами** — чтение, создание, редактирование, поиск по содержимому
+- **Работа с файлами** — чтение (с пагинацией), создание, редактирование, поиск по содержимому
 - **Терминал** — выполнение shell-команд с подтверждением пользователя
 - **Планирование** — автоматическое построение плана для сложных задач с отслеживанием прогресса
-- **Версионирование** — снимки файлов перед каждым изменением, откат к любой версии
-- **RAG-поиск** — индексирование файлов проекта и поиск по ним
+- **Версионирование** — SQLite-снимки файлов + Git-интеграция (автокоммиты, откат, история)
+- **RAG-поиск** — семантический чанкинг, word-level scoring, mtime-кэш, инкрементальная переиндексация
 - **Сессии** — сохранение и восстановление диалогов между запусками (SQLite)
-- **Красивый UI** — Rich-панели, подсветка синтаксиса, прогресс-бары, Markdown
-- **Много моделей** — 27 моделей через OpenRouter (бесплатные, дешёвые, платные, про)
+- **Красивый UI** — Rich-панели, подсветка синтаксиса, прогресс-бары, Markdown, подсказки команд
+- **Много моделей** — 27+ моделей через OpenRouter (бесплатные, дешёвые, платные, про)
+- **Creator Mode** — параллельное выполнение подзадач несколькими агентами (local + heavy модели)
+- **Параллельные инструменты** — read-only инструменты выполняются параллельно для ускорения
 - **Генерация PDF** — создание документов через ReportLab
 
 ---
@@ -71,6 +75,14 @@ tca env=sk-or-v1-xxx           # передать API-ключ через арг
 tca /path/to/project env=KEY   # оба варианта (любой порядок)
 ```
 
+По умолчанию запускается **TUI-IDE** (Textual). Классический режим только с чатом в терминале:
+
+```bash
+TCA_MODE=classic tca
+# или
+tca --classic
+```
+
 Альтернативный способ запуска (без установки):
 
 ```bash
@@ -109,15 +121,22 @@ python -m Terminal
 | `/model <id>` | Установить произвольную модель по ID |
 | `/profile [имя]` | Сменить профиль: `fast`, `balanced`, `quality` |
 | `/balance` | Показать баланс OpenRouter |
-| `/plan` | Показать текущий план задачи |
-| `/status` | Информация о модели, контексте, сообщениях |
+| `/plan` | Показать текущий план задачи (без LLM) |
+| `/status` | Информация о модели, контексте, RAG, сообщениях |
 | `/ls [путь]` | Список файлов в директории |
 | `/tree [путь]` | Дерево проекта |
-| `/versions <файл>` | История версий файла |
-| `/rollback <файл> [id]` | Откатить файл к предыдущей версии |
+| `/rag <запрос>` | Прямой поиск по проекту (RAG) без LLM |
+| `/versions <файл>` | История версий файла (SQLite) |
+| `/rollback <файл> [id]` | Откатить файл к предыдущей версии (SQLite) |
+| `/git status` | Статус Git-репозитория |
+| `/git log [файл]` | История Git-коммитов |
+| `/git diff [хеш]` | Git diff текущих изменений или коммита |
+| `/git rollback <хеш>` | Откатить Git-коммит (revert) |
 | `/compact` | Сжать историю разговора (освободить контекст) |
+| `/creator` | Включить/выключить Creator Mode (параллельные агенты) |
+| `/creator <задача>` | Запустить задачу в Creator Mode |
+| `/custom` | Управление кастомными инструментами |
 | `/agent list` | Список логических под-агентов |
-| `/agent use <id>` | Переключить под-агент |
 | `/help` | Справка по командам |
 | `/exit` | Выйти |
 
@@ -170,6 +189,8 @@ python -m Terminal
 | `TCA_MAX_TOKENS_BALANCED` | Max tokens для balanced | `8192` |
 | `TCA_MAX_TOKENS_QUALITY` | Max tokens для quality | `16384` |
 | `TCA_RAG_PATTERNS` | Паттерны для RAG-индексации | `*.py,*.md,*.ts,*.tsx,*.json` |
+| `TCA_RAG_MAX_FILES` | Макс. число файлов для RAG | `500` |
+| `LOCAL_API_KEY` | API-ключ для локального сервера (Creator Mode) | — |
 
 ### Доступные модели
 
@@ -193,46 +214,45 @@ GPT-5.1 Codex, GPT-5.3 Codex, Gemini 3.1 Pro, Claude Haiku 4.5, Claude Sonnet 4.
 
 ## Архитектура
 
-### Структура проекта
+Подробная карта модулей, потоков данных и путей к SQLite — в **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
+### Структура проекта (кратко)
 
 ```
 TCA/
-├── tca.py                    # Главная точка входа (команда tca)
-├── requirements.txt          # Зависимости
-├── install.sh / install.bat  # Скрипты установки
-├── uninstall.sh / .bat       # Скрипты удаления
+├── tca.py                      # Точка входа: TUI (по умолчанию) или classic CLI
+├── requirements.txt
+├── docs/                       # ARCHITECTURE.md, EXTENDING.md, TOOLS.md
 │
-├── Agent/                    # Ядро агента
-│   ├── agent.py              # LangGraph-петля: call_model → execute_tools → should_continue
-│   ├── llm_provider.py       # Управление моделями, профили, OpenRouter API
-│   ├── system_promt.py       # Системный промпт с правилами и описанием инструментов
-│   ├── planner.py            # Генерация планов задач через LLM
-│   ├── path_utils.py         # Утилита разрешения путей
-│   ├── multiagent.py         # Логические под-агенты (потоки работы)
-│   ├── .env                  # API-ключ (не в git)
-│   │
-│   ├── tools/                # Инструменты агента (LangChain @tool)
-│   │   ├── file_ops.py       # read_file, list_files, edit_file, write_file, search_in_files
-│   │   ├── code_gen.py       # create_code_file, append_code_snippet
-│   │   ├── terminal_tool.py  # run_command (с подтверждением пользователя)
-│   │   ├── planning_tool.py  # save_plan, load_plan, update_plan, clear_plan
-│   │   ├── versioning_tool.py# list_file_versions, rollback_file
-│   │   ├── interactive.py    # ask_user
-│   │   └── pdf_tool.py       # create_pdf
-│   │
-│   ├── checkpoint/           # Персистентность сессий (SQLite)
-│   ├── versioning/           # Снимки файлов для отката (SQLite)
-│   ├── rag/                  # RAG-индексирование и поиск
-│   └── file_loading/         # Загрузка файлов для RAG
+├── Agent/                      # Ядро: LLM, LangGraph, инструменты, RAG, сессии
+│   ├── agent.py                # run_tui_mode / run_coding_agent_loop
+│   ├── graph_runner.py         # LangGraph: call_model, execute_tools
+│   ├── tool_registry.py        # build_tools(), _base_tools + custom + agent_mode
+│   ├── message_utils.py        # Санитизация, компактирование истории
+│   ├── command_router.py       # Slash-команды в classic-режиме
+│   ├── llm_provider.py         # OpenRouter, профили, модели
+│   ├── planner.py              # Планы задач
+│   ├── git_integration.py      # GitPython
+│   ├── creator_mode.py         # Параллельные воркеры
+│   ├── creator_provider.py
+│   ├── system_promt.py         # Системный промпт
+│   ├── tools/                  # @tool: файлы, терминал, git, web, RAG, PDF, ...
+│   ├── rag/                    # Индексация и rag_search
+│   ├── checkpoint/             # Сессии (SQLite)
+│   ├── versioning/             # Снимки файлов (SQLite)
+│   └── file_loading/           # Загрузка файлов для RAG
 │
-├── Interface/                # Терминальный UI
-│   ├── visualization.py      # Rich-вывод: панели, таблицы, Markdown, прогресс-бары
-│   └── path_loading.py       # Разрешение путей, выбор директории
+├── Interface/                  # TUI (Textual) + Rich для classic
+│   ├── tui_app.py              # TCAApp: layout IDE
+│   ├── tui_bridge.py           # Мост агент ↔ панели (потокобезопасно)
+│   ├── themes.py               # Темы
+│   ├── visualization.py        # Rich в classic-режиме
+│   ├── graph_display.py        # Creator Mode (classic)
+│   └── panels/                 # file_explorer, code_editor, ai_chat, terminal, version_control
 │
-└── Terminal/                 # Модуль запуска и выполнения команд
-    ├── __main__.py           # python -m Terminal
-    ├── cli.py                # Альтернативная точка входа
-    └── runner.py             # Кросс-платформенное выполнение shell-команд
+└── Terminal/                   # python -m Terminal, runner shell
+    ├── cli.py
+    └── runner.py
 ```
 
 ### Как работает агент
@@ -256,7 +276,7 @@ TCA построен на [LangGraph](https://github.com/langchain-ai/langgraph)
 
 2. **`should_continue`** — если в ответе есть `tool_calls`, переходит к узлу `tools`. Иначе — завершение (END).
 
-3. **`execute_tools`** — последовательно выполняет все вызванные инструменты, формирует `ToolMessage` с результатами.
+3. **`execute_tools`** — выполняет вызванные инструменты (read-only параллельно, write последовательно), формирует `ToolMessage` с результатами.
 
 4. Цикл повторяется, пока модель не ответит текстом без tool_calls.
 
@@ -293,7 +313,7 @@ save_state(messages) → SQLite
 
 | Инструмент | Описание |
 |---|---|
-| `read_file(filename)` | Читает файл, возвращает содержимое и число строк |
+| `read_file(filename, offset, limit)` | Читает файл (с пагинацией для больших файлов) |
 | `list_files(path, recursive, pattern)` | Список файлов/директорий с поддержкой glob |
 | `search_in_files(directory, query, file_pattern)` | Полнотекстовый поиск по файлам |
 | `edit_file(path, old_str, new_str)` | Замена подстроки в файле (с автоматическим снимком) |
@@ -328,11 +348,20 @@ save_state(messages) → SQLite
 
 Снимки создаются автоматически перед каждой операцией записи/редактирования.
 
+#### Git
+
+| Инструмент | Описание |
+|---|---|
+| `git_log(path, limit)` | История коммитов (по файлу или всему проекту) |
+| `git_diff(commit)` | Diff коммита или текущих изменений |
+| `git_rollback_file(path, commit)` | Откат файла к конкретному коммиту |
+| `git_status()` | Текущий статус Git-репозитория |
+
 #### Прочие
 
 | Инструмент | Описание |
 |---|---|
-| `rag_search(query, top_k)` | Поиск по индексированным файлам проекта |
+| `rag_search(query, top_k)` | Поиск по проекту с чанкингом и ранжированием |
 | `ask_user(question)` | Задать вопрос пользователю в терминале |
 | `create_pdf(filepath, title, body)` | Создать PDF-документ |
 
@@ -389,6 +418,8 @@ langchain-core   — базовые абстракции (messages, tools)
 langchain-openai — ChatOpenAI для работы с OpenRouter
 langgraph        — граф состояний для agent loop
 rich             — красивый терминальный вывод
+gitpython        — интеграция с Git (авто-коммиты, rollback, история)
+ddgs             — веб-поиск через DuckDuckGo
 reportlab        — генерация PDF (опционально)
 ```
 
@@ -413,10 +444,10 @@ from .my_tool import my_tool
 # Добавьте в __all__
 ```
 
-3. Добавьте в список `tools` в `Agent/agent.py`:
+3. Добавьте в список `_base_tools` в `Agent/tool_registry.py`:
 
 ```python
-tools = [
+_base_tools: List[Any] = [
     ...,
     my_tool,
 ]
@@ -438,12 +469,23 @@ tools = [
 
 | Модуль | Что менять |
 |---|---|
-| `Agent/agent.py` | Логика агента, обработка ошибок, компактирование |
-| `Agent/llm_provider.py` | Модели, профили, провайдеры |
-| `Agent/system_promt.py` | Системный промпт (поведение агента) |
-| `Agent/tools/` | Инструменты, доступные агенту |
-| `Interface/visualization.py` | Отображение в терминале |
-| `Terminal/runner.py` | Выполнение shell-команд |
+| `Agent/agent.py` | Точка входа TUI/classic, мост с UI, сессии |
+| `Agent/graph_runner.py` | LangGraph: узлы и рёбра графа |
+| `Agent/tool_registry.py` | Список инструментов, `build_tools(agent_mode=...)` |
+| `Agent/command_router.py` | Slash-команды (classic) |
+| `Agent/message_utils.py` | Санитизация, компактирование истории |
+| `Agent/git_integration.py` | Git |
+| `Agent/rag/` | RAG |
+| `Agent/llm_provider.py` | Модели и OpenRouter |
+| `Agent/system_promt.py` | Системный промпт |
+| `Agent/tools/` | Реализации инструментов |
+| `Interface/tui_app.py` | Layout IDE, CSS |
+| `Interface/tui_bridge.py` | Обновление панелей из фонового агента |
+| `Interface/panels/*.py` | Отдельные панели (редактор, чат, git, …) |
+| `Interface/visualization.py` | Вывод в classic-режиме |
+| `Terminal/runner.py` | Shell-команды |
+
+Полная таблица файлов — **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ---
 

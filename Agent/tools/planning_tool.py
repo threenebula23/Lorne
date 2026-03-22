@@ -13,7 +13,9 @@ from langchain_core.tools import tool
 
 
 def _plan_path() -> Path:
-    return Path.cwd() / ".tca_plan.json"
+    tca_dir = Path.cwd() / ".tca"
+    tca_dir.mkdir(exist_ok=True)
+    return tca_dir / "plan.json"
 
 
 def _load_raw() -> Dict[str, Any]:

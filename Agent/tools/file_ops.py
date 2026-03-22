@@ -16,19 +16,48 @@ except ImportError:
         return ""
 
 
+def _git_auto_snapshot(file_path: str, action: str) -> None:
+    """Attempt a Git auto-snapshot after file modification."""
+    try:
+        from Agent.git_integration import get_git_manager
+        gm = get_git_manager()
+        if gm.available:
+            rel = os.path.relpath(file_path, os.getcwd())
+            gm.auto_snapshot(f"{action}: {rel}", files=[file_path])
+    except Exception:
+        pass
+
+
 def _skip_dir(name: str) -> bool:
     return name.startswith(".") or name == "__pycache__" or name == "node_modules" or name == ".git"
 
 
 @tool
-def read_file(filename: str, encoding: str = "utf-8") -> Dict[str, Any]:
-    """Читает содержимое файла. filename — путь к файлу (относительный или абсолютный). Возвращает total_lines."""
+def read_file(filename: str, encoding: str = "utf-8",
+              offset: int = 0, limit: int = 0) -> Dict[str, Any]:
+    """Читает содержимое файла. filename — путь к файлу. offset — начальная строка (0-based), limit — кол-во строк (0 = весь файл). Для больших файлов используй offset+limit для чтения по частям."""
     full_path = resolve_abs_path(filename)
     try:
         content = full_path.read_text(encoding=encoding)
     except UnicodeDecodeError:
         content = "(бинарный или не UTF-8 файл)"
-    total_lines = len(content.splitlines())
+    all_lines = content.splitlines(keepends=True)
+    total_lines = len(all_lines)
+
+    if offset > 0 or limit > 0:
+        start = max(0, offset)
+        end = start + limit if limit > 0 else total_lines
+        selected = all_lines[start:end]
+        content = "".join(selected)
+        return {
+            "file_path": str(full_path),
+            "content": content,
+            "total_lines": total_lines,
+            "offset": start,
+            "limit": len(selected),
+            "showing": f"строки {start + 1}-{start + len(selected)} из {total_lines}",
+        }
+
     return {"file_path": str(full_path), "content": content, "total_lines": total_lines}
 
 
@@ -116,6 +145,7 @@ def edit_file(path: str, old_str: str, new_str: str) -> Dict[str, Any]:
     snapshot_id = save_version(str(full_path), original, note="before-edit_file-replace") or ""
     edited = original.replace(old_str, new_str, 1)
     full_path.write_text(edited, encoding="utf-8")
+    _git_auto_snapshot(str(full_path), "edit_file")
     old_lines = len(old_str.splitlines())
     new_lines = len(new_str.splitlines())
     total_lines = len(edited.splitlines())
@@ -147,6 +177,7 @@ def write_file(path: str, content: str) -> Dict[str, Any]:
         snapshot_id = save_version(str(full_path), before_text, note="before-write_file") or ""
     full_path.write_text(content, encoding="utf-8")
     total_lines = len(content.splitlines())
+    _git_auto_snapshot(str(full_path), "write_file")
     return {
         "path": str(full_path),
         "action": "written",

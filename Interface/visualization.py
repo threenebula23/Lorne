@@ -30,14 +30,14 @@ except ImportError:
     HAS_RICH = False
 
 _theme = Theme({
-    "info": "cyan",
-    "success": "bold green",
-    "warning": "bold yellow",
-    "error": "bold red",
-    "tool": "bold magenta",
-    "dim": "dim white",
-    "accent": "bold blue",
-    "header": "bold white on blue",
+    "info": "#A78BFA",
+    "success": "bold #10B981",
+    "warning": "bold #F59E0B",
+    "error": "bold #EF4444",
+    "tool": "bold #8B5CF6",
+    "dim": "#6B7280",
+    "accent": "bold #8B5CF6",
+    "header": "bold #E5E7EB on #1a1a2e",
 }) if HAS_RICH else None
 
 console = Console(theme=_theme, highlight=False) if HAS_RICH else None
@@ -45,13 +45,13 @@ console = Console(theme=_theme, highlight=False) if HAS_RICH else None
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-CYAN = "\033[36m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
-MAGENTA = "\033[35m"
-BLUE = "\033[34m"
-RED = "\033[31m"
-WHITE = "\033[37m"
+CYAN = "\033[38;2;167;139;250m"   # #A78BFA purple-light
+GREEN = "\033[38;2;16;185;129m"   # #10B981
+YELLOW = "\033[38;2;245;158;11m"  # #F59E0B
+MAGENTA = "\033[38;2;139;92;246m" # #8B5CF6
+BLUE = "\033[38;2;139;92;246m"    # #8B5CF6 (purple as primary)
+RED = "\033[38;2;239;68;68m"      # #EF4444
+WHITE = "\033[38;2;229;231;235m"  # #E5E7EB
 
 # ─── Лимиты контекста по моделям ──────────────────────────────────
 # Built dynamically from AVAILABLE_MODELS in llm_provider to avoid
@@ -121,6 +121,10 @@ def _truncate(text: str, max_len: int = 300) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 def section(title: str, char: str = "═") -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_separator(title)
+        return
     if HAS_RICH:
         console.print()
         console.print(Rule(f"[bold]{title}[/bold]", style="blue"))
@@ -145,6 +149,10 @@ def step(num: int, title: str, detail: str = "") -> None:
 
 
 def round_header(round_num: int) -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_separator(f"Round {round_num}")
+        return
     if HAS_RICH:
         console.print()
         console.print(
@@ -163,6 +171,10 @@ def round_header(round_num: int) -> None:
 
 
 def display_agent_action(step_num: int, name: str, args: Dict[str, Any]) -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        return
+
     short_args = {}
     for k, v in args.items():
         if k in ("new_str", "code", "snippet", "content") and isinstance(v, str):
@@ -197,6 +209,11 @@ def display_agent_action(step_num: int, name: str, args: Dict[str, Any]) -> None
 
 
 def display_tool_result(step_num: int, name: str, result: Any) -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_tool_result(name, result)
+        return
+
     if name in ("save_plan", "update_plan", "load_plan", "clear_plan"):
         _display_plan_result(name, result)
         return
@@ -444,8 +461,11 @@ def _display_search_result(result: Dict[str, Any]) -> None:
 def display_model_reply(step_num: int, content: str, response_metadata: Optional[Dict[str, Any]] = None) -> None:
     if not content or not content.strip():
         return
+
+    bridge = _get_tui_bridge()
+    if bridge:
+        return
         
-    # Strip thought tags
     import re as _re
     clean_content = _re.sub(r"<thought>[\s\S]*?</thought>", "", content).strip()
     if not clean_content:
@@ -483,6 +503,14 @@ def display_model_reply(step_num: int, content: str, response_metadata: Optional
 
 def display_turn_summary(file_changes: List[Dict[str, Any]]) -> None:
     if not file_changes:
+        return
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_info(f"Files changed: {len(file_changes)}")
+        for fc in file_changes:
+            path_short = _short_path(fc.get("path", ""), 50)
+            action = fc.get("action", "")
+            bridge.on_info(f"  {action}: {path_short}")
         return
 
     if HAS_RICH:
@@ -546,6 +574,10 @@ def display_usage(
     if not (inp or out or total):
         return {}
 
+    bridge = _get_tui_bridge()
+    if bridge:
+        return {"input_tokens": inp, "output_tokens": out, "total_tokens": total or inp + out}
+
     if HAS_RICH:
         pct = round(100 * (total or 0) / context_limit, 1) if context_limit and context_limit > 0 else 0
         bar_len = 20
@@ -580,6 +612,12 @@ def display_cumulative_usage(
 ) -> None:
     if not cumulative:
         return
+    bridge = _get_tui_bridge()
+    if bridge:
+        total = cumulative.get("total_tokens", 0)
+        bridge.on_context_update(total, context_limit)
+        return
+
     inp = cumulative.get("input_tokens", 0)
     out = cumulative.get("output_tokens", 0)
     total = cumulative.get("total_tokens", 0)
@@ -608,6 +646,12 @@ def display_cumulative_usage(
 # ─── Хелперы для основного цикла агента ────────────────────────────
 
 def print_welcome(model_name: str, profile: str, project_name: str, balance: str = "") -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_info(f"TCA — {model_name} ({profile}) | Project: {project_name}")
+        if balance:
+            bridge.on_info(f"Balance: {balance}")
+        return
     balance_line = f"\n  [dim]Баланс:[/dim]  [bold green]{balance}[/bold green]" if balance else ""
     balance_plain = f"\n  Баланс:  {balance}" if balance else ""
     if HAS_RICH:
@@ -619,7 +663,7 @@ def print_welcome(model_name: str, profile: str, project_name: str, balance: str
                 f"  [dim]Профиль:[/dim] [bold]{profile}[/bold]\n"
                 f"  [dim]Проект:[/dim]  [bold]{project_name}[/bold]"
                 f"{balance_line}",
-                border_style="blue",
+                border_style="#8B5CF6",
                 box=box.DOUBLE,
                 padding=(1, 3),
             )
@@ -638,6 +682,10 @@ def print_welcome(model_name: str, profile: str, project_name: str, balance: str
 
 def display_shell_command(command: str) -> None:
     """Display a user-initiated shell command with terminal-like styling."""
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_action("shell", command)
+        return
     if HAS_RICH:
         console.print(
             Panel(
@@ -658,6 +706,15 @@ def display_shell_command(command: str) -> None:
 
 def display_model_selector(models: list, current_model: str) -> None:
     """Display a rich model selection interface grouped by tier."""
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_info("── Выбор модели ──")
+        for i, m in enumerate(models, 1):
+            cur = " ◀ текущая" if m["id"] == current_model else ""
+            bridge.on_info(f"  {i:>2}. {m['name']:<25} [{m['tier']}]{cur}")
+        bridge.on_info("Используй /model <id> для выбора")
+        return
+
     if not HAS_RICH:
         for i, m in enumerate(models, 1):
             cur = " ◀ текущая" if m["id"] == current_model else ""
@@ -673,7 +730,7 @@ def display_model_selector(models: list, current_model: str) -> None:
 
     table = Table(
         box=box.ROUNDED,
-        border_style="blue",
+        border_style="#8B5CF6",
         padding=(0, 1),
         title="[bold white]  Выбор модели [/bold white]",
         caption="[dim]Введи номер модели, или [bold]/model <id>[/bold] для произвольной[/dim]",
@@ -711,6 +768,13 @@ def display_status_panel(
     human_count: int, ai_count: int, tool_count: int, total: int,
 ) -> None:
     """Display a formatted status panel for /status command."""
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_info(f"Модель: {model_name} ({profile})")
+        bridge.on_info(f"Контекст: {context_limit:,} токенов")
+        bridge.on_info(f"Сообщения: 👤 {human_count}  🤖 {ai_count}  🔧 {tool_count}  Σ {total}")
+        return
+
     if not HAS_RICH:
         print(f"  Профиль: {profile} | Модель: {model_name}")
         print(f"  Лимит контекста: {context_limit:,} токенов")
@@ -744,54 +808,69 @@ def display_status_panel(
         Panel(
             content,
             title="[bold]  Статус сессии [/bold]",
-            border_style="blue",
+            border_style="#8B5CF6",
             box=box.ROUNDED,
             padding=(1, 2),
         )
     )
 
 
+_HELP_CATEGORIES = [
+    ("💬 Чат", [
+        ("Enter", "Продолжить (следующий шаг)"),
+        ("!<команда>", "Выполнить команду в терминале"),
+    ]),
+    ("🤖 Модель", [
+        ("/model", "Выбрать модель (сохраняется)"),
+        ("/profile [имя]", "fast / balanced / quality"),
+        ("/balance", "Баланс OpenRouter"),
+    ]),
+    ("📁 Проект", [
+        ("/ls [путь]", "Список файлов"),
+        ("/tree [путь]", "Дерево проекта"),
+        ("/rag <запрос>", "Поиск по проекту (RAG)"),
+        ("/plan", "Текущий план задачи"),
+        ("/status", "Статус сессии"),
+    ]),
+    ("🔄 История", [
+        ("/versions <файл>", "Версии файла (SQLite)"),
+        ("/rollback <файл>", "Откатить файл (SQLite)"),
+        ("/git log [файл]", "История Git-коммитов"),
+        ("/git diff [хеш]", "Показать Git-diff"),
+        ("/git rollback <хеш>", "Откатить Git-коммит"),
+        ("/git status", "Статус Git"),
+        ("/compact", "Сжать контекст"),
+    ]),
+    ("🔧 Custom Tools", [
+        ("/custom", "Список кастомных тулов"),
+        ("/custom add <имя>", "Добавить свой тул"),
+        ("/custom remove <имя>", "Удалить тул"),
+        ("/custom reload", "Перезагрузить тулы"),
+    ]),
+    ("⚡ Creator Mode", [
+        ("/creator", "Включить creator mode"),
+        ("/creator <задача>", "Запустить задачу в creator mode"),
+        ("/creator config", "Конфигурация creator"),
+        ("/creator set <key> <val>", "Изменить настройку"),
+        ("/creator off", "Выключить creator mode"),
+    ]),
+    ("⚙️  Система", [
+        ("/agent list|use", "Управление под-агентами"),
+        ("/help", "Эта справка"),
+        ("/exit", "Выход"),
+    ]),
+]
+
+
 def print_commands() -> None:
-    _categories = [
-        ("💬 Чат", [
-            ("Enter", "Продолжить (следующий шаг)"),
-            ("[bright_green]![/bright_green]<команда>", "Выполнить команду в терминале"),
-        ]),
-        ("🤖 Модель", [
-            ("/model", "Выбрать модель (сохраняется)"),
-            ("/profile [имя]", "fast / balanced / quality"),
-            ("/balance", "Баланс OpenRouter"),
-        ]),
-        ("📁 Проект", [
-            ("/ls [путь]", "Список файлов"),
-            ("/tree [путь]", "Дерево проекта"),
-            ("/plan", "Текущий план задачи"),
-            ("/status", "Статус сессии"),
-        ]),
-        ("🔄 История", [
-            ("/versions <файл>", "Версии файла"),
-            ("/rollback <файл>", "Откатить файл к предыдущей"),
-            ("/compact", "Сжать контекст"),
-        ]),
-        ("🔧 Custom Tools", [
-            ("/custom", "Список кастомных тулов"),
-            ("/custom add <имя>", "Добавить свой тул"),
-            ("/custom remove <имя>", "Удалить тул"),
-            ("/custom reload", "Перезагрузить тулы"),
-        ]),
-        ("⚡ Creator Mode", [
-            ("/creator", "Включить creator mode"),
-            ("/creator <задача>", "Запустить задачу в creator mode"),
-            ("/creator config", "Конфигурация creator"),
-            ("/creator set <key> <val>", "Изменить настройку"),
-            ("/creator off", "Выключить creator mode"),
-        ]),
-        ("⚙️  Система", [
-            ("/agent list|use", "Управление под-агентами"),
-            ("/help", "Эта справка"),
-            ("/exit", "Выход"),
-        ]),
-    ]
+    bridge = _get_tui_bridge()
+    if bridge:
+        for cat_name, cmds in _HELP_CATEGORIES:
+            bridge.on_info(f"── {cat_name} ──")
+            for cmd, desc in cmds:
+                bridge.on_info(f"  {cmd:<24} {desc}")
+        return
+
     if HAS_RICH:
         table = Table(
             box=box.SIMPLE,
@@ -802,7 +881,7 @@ def print_commands() -> None:
         table.add_column("Команда", min_width=24)
         table.add_column("Описание", style="dim")
 
-        for cat_name, cmds in _categories:
+        for cat_name, cmds in _HELP_CATEGORIES:
             table.add_row(f"\n[bold]{cat_name}[/bold]", "")
             for cmd, desc in cmds:
                 table.add_row(f"  [cyan bold]{cmd}[/cyan bold]", desc)
@@ -811,14 +890,14 @@ def print_commands() -> None:
             Panel(
                 table,
                 title="[bold]  Справка [/bold]",
-                border_style="blue",
+                border_style="#8B5CF6",
                 box=box.ROUNDED,
                 padding=(0, 1),
             )
         )
     else:
         all_cmds = []
-        for _, cmds in _categories:
+        for _, cmds in _HELP_CATEGORIES:
             all_cmds.extend(cmds)
         for cmd, desc in all_cmds:
             clean = cmd.replace("[bright_green]", "").replace("[/bright_green]", "")
@@ -828,6 +907,9 @@ def print_commands() -> None:
 
 def print_session_list(sessions: list) -> None:
     if not sessions:
+        return
+    bridge = _get_tui_bridge()
+    if bridge:
         return
     if HAS_RICH:
         table = Table(title="[bold]Доступные сессии[/bold]", box=box.SIMPLE, padding=(0, 1))
@@ -850,6 +932,12 @@ def print_session_list(sessions: list) -> None:
 
 
 def print_thinking(thought: str = "") -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        if thought:
+            bridge.on_thought(thought)
+        return
+
     if not thought:
         if HAS_RICH:
             console.print("[dim]  ⏳ Думаю…[/dim]")
@@ -874,13 +962,30 @@ def print_thinking(thought: str = "") -> None:
 
 
 def print_planning(task: str) -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_info(f"📋 Planning: {_truncate(task, 100)}")
+        return
     if HAS_RICH:
         console.print(f"\n[dim]  📋 Составляю план:[/dim] [bold]{_truncate(task, 100)}[/bold]")
     else:
         print(f"\n   📋 Составляю план: {_truncate(task, 100)}")
 
 
+def _get_tui_bridge():
+    """Return the active TUI bridge, if any."""
+    try:
+        from Interface.tui_bridge import get_bridge
+        return get_bridge()
+    except Exception:
+        return None
+
+
 def print_info(message: str) -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_info(message)
+        return
     if HAS_RICH:
         console.print(f"  [info]{message}[/info]")
     else:
@@ -888,6 +993,10 @@ def print_info(message: str) -> None:
 
 
 def print_success(message: str) -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_success(message)
+        return
     if HAS_RICH:
         console.print(f"  [success]✓ {message}[/success]")
     else:
@@ -895,6 +1004,10 @@ def print_success(message: str) -> None:
 
 
 def print_warning(message: str) -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_warning(message)
+        return
     if HAS_RICH:
         console.print(f"  [warning]⚠ {message}[/warning]")
     else:
@@ -902,6 +1015,10 @@ def print_warning(message: str) -> None:
 
 
 def print_error(message: str) -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_error(message)
+        return
     if HAS_RICH:
         console.print(f"  [error]✗ {message}[/error]")
     else:
@@ -925,7 +1042,7 @@ def display_file_diffs(files: List[str]) -> None:
     """Визуализация списка измененных файлов (как в обычном агенте)."""
     if not files:
         return
-        
+
     if HAS_RICH:
         table = Table(
             title="[bold green]Измененные файлы[/bold green]",
@@ -934,12 +1051,225 @@ def display_file_diffs(files: List[str]) -> None:
         )
         table.add_column("Файл", style="bold white")
         table.add_column("Статус", style="green")
-        
+
         for f in sorted(files):
             table.add_row(f, "✓ Готово")
-            
+
         console.print(table)
     else:
         print(f"\n{GREEN}Измененные файлы:{RESET}")
         for f in sorted(files):
             print(f"  ✓ {f}")
+
+
+# ─── RAG progress display ──────────────────────────────────────────
+
+def display_rag_progress(current: int, total: int) -> None:
+    """Display RAG indexing progress inline."""
+    if total <= 0:
+        return
+    bridge = _get_tui_bridge()
+    if bridge:
+        if current >= total:
+            bridge.on_info(f"RAG indexed: {total} files")
+        return
+    pct = int(100 * current / total)
+    bar_len = 30
+    filled = int(bar_len * current / total)
+    bar = "█" * filled + "░" * (bar_len - filled)
+    line = f"\r  Индексация: {bar} {pct}% ({current}/{total} файлов)  "
+    import sys
+    sys.stdout.write(line)
+    sys.stdout.flush()
+    if current >= total:
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+
+
+def display_rag_results(results: List[Dict[str, Any]], query_text: str) -> None:
+    """Display RAG search results in a formatted table."""
+    bridge = _get_tui_bridge()
+    if bridge:
+        if not results:
+            bridge.on_info(f"RAG: нет результатов для '{query_text}'")
+            return
+        bridge.on_info(f"RAG: '{query_text}' — {len(results)} результатов")
+        for r in results:
+            path = _short_path(r.get("path", ""), 50)
+            lines = f"{r.get('start_line', '?')}-{r.get('end_line', '?')}"
+            score = r.get("score", "")
+            bridge.on_info(f"  {path}  L{lines}  score={score}")
+        return
+
+    if HAS_RICH:
+        if not results:
+            console.print(f"  [dim]RAG: нет результатов для '{query_text}'[/dim]")
+            return
+        table = Table(
+            title=f"[bold]RAG: '{query_text}'[/bold]",
+            box=box.ROUNDED, padding=(0, 1), border_style="cyan",
+        )
+        table.add_column("Файл", style="cyan", max_width=50)
+        table.add_column("Строки", style="dim", width=10)
+        table.add_column("Score", style="bold yellow", width=8, justify="right")
+        table.add_column("Сниппет", style="dim", max_width=60)
+
+        for r in results:
+            path = _short_path(r.get("path", ""), 50)
+            lines = f"{r.get('start_line', '?')}-{r.get('end_line', '?')}"
+            score = str(r.get("score", ""))
+            snippet = _truncate(r.get("snippet", ""), 60)
+            table.add_row(path, lines, score, snippet)
+
+        console.print(table)
+    else:
+        if not results:
+            print(f"  RAG: нет результатов для '{query_text}'")
+            return
+        print(f"  RAG: '{query_text}' — {len(results)} результатов")
+        for r in results:
+            path = _short_path(r.get("path", ""), 50)
+            print(f"    {path}  строки {r.get('start_line')}-{r.get('end_line')}  score={r.get('score')}")
+
+
+def display_enhanced_status(
+    model_name: str, profile: str, context_limit: int,
+    human_count: int, ai_count: int, tool_count: int, total: int,
+    rag_stats: Optional[Dict[str, Any]] = None,
+    version_count: int = 0,
+    session_start: Optional[float] = None,
+    creator_active: bool = False,
+) -> None:
+    """Enhanced status panel with RAG, versioning, and creator mode info."""
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_info(f"Модель: {model_name} ({profile})")
+        bridge.on_info(f"Контекст: {context_limit:,} токенов")
+        bridge.on_info(f"Сообщения: 👤 {human_count}  🤖 {ai_count}  🔧 {tool_count}  Σ {total}")
+        if rag_stats and rag_stats.get("chunks"):
+            bridge.on_info(f"RAG: {rag_stats['chunks']:,} чанков, {rag_stats['files']} файлов")
+        if creator_active:
+            bridge.on_info("Creator Mode: активен")
+        bridge.on_status_update(model=model_name, tokens=f"{total} msgs")
+        return
+
+    if not HAS_RICH:
+        display_status_panel(model_name, profile, context_limit,
+                             human_count, ai_count, tool_count, total)
+        if rag_stats:
+            print(f"  RAG: {rag_stats.get('chunks', 0)} чанков, {rag_stats.get('files', 0)} файлов")
+        if version_count:
+            print(f"  Версии файлов: {version_count}")
+        if creator_active:
+            print(f"  Creator Mode: активен")
+        return
+
+    pct = 0
+    if context_limit > 0:
+        approx_tokens = total * 150
+        pct = round(100 * approx_tokens / context_limit, 1)
+    bar_len = 20
+    filled = min(int(bar_len * pct / 100), bar_len)
+    bar_color = "green" if pct < 50 else ("yellow" if pct < 80 else "red")
+    bar = f"[{bar_color}]{'█' * filled}{'░' * (bar_len - filled)}[/{bar_color}] [dim]{pct}%[/dim]"
+
+    model_link = f"[link=https://openrouter.ai/models/{model_name}]{model_name}[/link]"
+
+    content = (
+        f"  [dim]Модель:[/dim]    [bold cyan]{model_link}[/bold cyan]\n"
+        f"  [dim]Профиль:[/dim]  [bold]{profile}[/bold]\n"
+        f"  [dim]Контекст:[/dim] [bold]{context_limit:,}[/bold] токенов\n\n"
+        f"  [dim]Сообщения:[/dim]\n"
+        f"    [cyan]👤[/cyan] Пользователь  [bold]{human_count}[/bold]\n"
+        f"    [green]🤖[/green] Ассистент      [bold]{ai_count}[/bold]\n"
+        f"    [magenta]🔧[/magenta] Инструменты    [bold]{tool_count}[/bold]\n"
+        f"    [dim]━━━━━━━━━━━━━━━━━━━━[/dim]\n"
+        f"    [bold]Σ  Всего           {total}[/bold]\n\n"
+        f"  [dim]Заполнение контекста:[/dim] {bar}"
+    )
+
+    if rag_stats and rag_stats.get("chunks"):
+        content += (
+            f"\n\n  [dim]RAG индекс:[/dim] [bold]{rag_stats['chunks']:,}[/bold] чанков, "
+            f"[bold]{rag_stats['files']}[/bold] файлов"
+        )
+
+    if version_count:
+        content += f"\n  [dim]Версии файлов:[/dim] [bold]{version_count}[/bold]"
+
+    if creator_active:
+        content += "\n  [dim]Creator Mode:[/dim] [bold green]активен[/bold green]"
+
+    if session_start:
+        import time
+        elapsed = time.time() - session_start
+        mins = int(elapsed // 60)
+        secs = int(elapsed % 60)
+        content += f"\n  [dim]Время сессии:[/dim] [bold]{mins}м {secs}с[/bold]"
+
+    console.print(
+        Panel(
+            content,
+            title="[bold]  Статус сессии [/bold]",
+            border_style="#8B5CF6",
+            box=box.ROUNDED,
+            padding=(1, 2),
+        )
+    )
+
+    # Token usage chart via plotext
+    if rag_stats and rag_stats.get("chunks"):
+        try:
+            import plotext as plt
+            import io
+
+            plt.clf()
+            plt.theme("dark")
+            labels = ["Chunks", "Files"]
+            values = [rag_stats["chunks"], rag_stats["files"]]
+            plt.bar(labels, values, color=[140, 92, 246])
+            plt.title("RAG Index")
+            plt.plotsize(40, 8)
+
+            buf = io.StringIO()
+            plt.savefig(buf)
+            chart_text = buf.getvalue()
+            if chart_text.strip():
+                console.print(Panel(
+                    chart_text,
+                    title="[dim]RAG Index[/dim]",
+                    border_style="#2D2D3D",
+                    box=box.ROUNDED,
+                ))
+        except Exception:
+            pass
+
+
+def suggest_command(user_input: str) -> Optional[str]:
+    """Suggest a command if user input looks like a mistyped command."""
+    if not user_input.startswith("/"):
+        return None
+
+    known_commands = [
+        "/help", "/exit", "/plan", "/status", "/profile", "/model",
+        "/balance", "/credits", "/compact", "/versions", "/rollback",
+        "/agent", "/custom", "/creator", "/ls", "/tree", "/rag",
+    ]
+
+    cmd = user_input.split()[0].lower()
+    if cmd in known_commands:
+        return None
+
+    best_match = None
+    best_score = 0
+
+    for known in known_commands:
+        common = sum(1 for a, b in zip(cmd, known) if a == b)
+        if len(cmd) > 2 and cmd[1:3] in known:
+            common += 2
+        score = common / max(len(cmd), len(known))
+        if score > best_score and score > 0.4:
+            best_score = score
+            best_match = known
+
+    return best_match

@@ -49,6 +49,11 @@ except ImportError:
 _MAX_WORKER_ROUNDS = 100
 
 
+class _AuthFallbackError(Exception):
+    """Raised when a local model returns an auth error, triggering fallback to heavy."""
+    pass
+
+
 def _build_worker_graph(
     llm: ChatOpenAI,
     tools: List[BaseTool],
@@ -136,6 +141,9 @@ def _is_auth_error(exc: Exception) -> bool:
     return any(p in msg for p in ("401", "403", "unauthorized", "forbidden", "authentication"))
 
 
+_MAX_DEPTH = 5
+
+
 def _run_single_worker(
     worker_id: str,
     task: str,
@@ -145,13 +153,15 @@ def _run_single_worker(
     model_name: str,
     display: Optional[Any] = None,
     project_context: str = "",
+    depth: int = 0,
 ) -> Dict[str, Any]:
     """Запустить одного воркера-агента.
 
     Если локальная модель возвращает 401 — автоматически переключается на heavy.
+    Может рекурсивно порождать дочерних воркеров (depth контролирует глубину).
 
     Returns:
-        {"worker_id", "task", "status", "result", "tool_calls", "rounds", "elapsed"}
+        {"worker_id", "task", "status", "result", "tool_calls", "rounds", "elapsed", "children"}
     """
     start_time = time.time()
 
@@ -177,21 +187,57 @@ def _run_single_worker(
 После завершения дай краткий отчёт что было сделано.
 """
 
+    # Build spawn_sub_creator tool for recursive delegation
+    sub_results: List[Dict[str, Any]] = []
+
+    if depth < _MAX_DEPTH:
+        from langchain_core.tools import tool as lc_tool
+
+        @lc_tool
+        def spawn_sub_creator(subtask: str) -> Dict[str, Any]:
+            """Делегировать подзадачу дочернему агенту. Используй если задача слишком сложная и её можно разбить на подзадачи."""
+            child_result = run_creator_mode(
+                task=subtask,
+                tools=tools,
+                project_context=project_context,
+                depth=depth + 1,
+                parent_worker_id=worker_id,
+            )
+            sub_results.append(child_result)
+            done = child_result.get("workers_done", 0)
+            total = child_result.get("workers_total", 0)
+            return {
+                "status": child_result.get("status", "unknown"),
+                "workers_done": done,
+                "workers_total": total,
+                "summary": f"Sub-creator: {done}/{total} tasks done",
+            }
+
+        worker_tools = list(tools) + [spawn_sub_creator]
+    else:
+        worker_tools = list(tools)
+
     messages = [
         SystemMessage(content=worker_system),
         HumanMessage(content=f"Подзадача: {task}\n\nВыполни эту задачу."),
     ]
 
-    # Попытка построить граф — с fallback на heavy при ошибке авторизации
     current_llm = llm
     current_model_name = model_name
     current_model_type = model_type
 
     try:
-        graph = _build_worker_graph(current_llm, tools, current_model_name)
+        from Interface.tui_bridge import get_bridge
+        bridge = get_bridge()
+        if bridge:
+            bridge.on_creator_worker_update(worker_id, action=f"Starting: {task[:60]}")
+    except Exception:
+        bridge = None
+
+    try:
+        graph = _build_worker_graph(current_llm, worker_tools, current_model_name)
     except Exception as e:
         if _is_auth_error(e) and model_type == "local":
-            # Fallback на heavy
             try:
                 heavy_llm, heavy_name = get_heavy_llm()
                 current_llm = heavy_llm
@@ -203,7 +249,7 @@ def _run_single_worker(
                         model_name=heavy_name,
                         model_type="heavy",
                     )
-                graph = _build_worker_graph(current_llm, tools, current_model_name)
+                graph = _build_worker_graph(current_llm, worker_tools, current_model_name)
             except Exception as e2:
                 if display:
                     display.update_worker(worker_id, status="error", end_time=time.time())
@@ -243,34 +289,37 @@ def _run_single_worker(
                     if msg.tool_calls:
                         current_round_num += 1
                         current_tool_count += len(msg.tool_calls)
-                        if msg is messages[-1]:  # Update display only for the latest message
+                        if msg is messages[-1]:
+                            t_names = ", ".join(tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "") for tc in msg.tool_calls)
+                            action_text = msg_content if msg_content else f"Calling: {t_names}"
                             if display:
-                                t_names = ", ".join(tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "") for tc in msg.tool_calls)
-                                action_text = msg_content if msg_content else f"⚙️ Вызов: {t_names}"
                                 display.update_worker(
                                     worker_id,
                                     tool_calls=current_tool_count,
                                     rounds=current_round_num,
                                     current_action=action_text
                                 )
+                            if bridge:
+                                bridge.on_creator_worker_update(
+                                    worker_id, tool_name=t_names,
+                                    action=action_text[:100],
+                                    thinking=msg_content[:200] if msg_content else "",
+                                )
                     elif msg_content and msg is messages[-1]:
                         final_content = msg_content
                         if display:
-                            display.update_worker(worker_id, current_action="💡 Финализация")
+                            display.update_worker(worker_id, current_action="Finalizing")
+                        if bridge:
+                            bridge.on_creator_worker_update(
+                                worker_id, action="Finalizing",
+                                thinking=msg_content[:200],
+                            )
 
             round_num = current_round_num
             tool_count = current_tool_count
 
             if round_num >= _MAX_WORKER_ROUNDS:
                 break
-
-        # DEBUG: Dump the message history to figure out why workers get stuck
-        with open(f".tca_creator_debug_{worker_id}.json", "w", encoding="utf-8") as f:
-            debug_msgs = []
-            for m in messages:
-                if hasattr(m, "content"):
-                    debug_msgs.append({"type": type(m).__name__, "content": str(m.content)[:500], "tool_calls": getattr(m, "tool_calls", None)})
-            json.dump(debug_msgs, f, ensure_ascii=False, indent=2)
 
     except _AuthFallbackError:
         # Fallback на heavy модель
@@ -359,7 +408,7 @@ def _run_single_worker(
             model_type=current_model_type,
         )
 
-    return {
+    result_data = {
         "worker_id": worker_id,
         "task": task,
         "status": final_status,
@@ -369,7 +418,67 @@ def _run_single_worker(
         "elapsed": end_time - start_time,
         "model_type": current_model_type,
         "model_name": current_model_name,
+        "children": sub_results,
+        "depth": depth,
     }
+
+    # Push to TUI bridge if available
+    try:
+        from Interface.tui_bridge import get_bridge
+        bridge = get_bridge()
+        if bridge:
+            tree_data = _build_tree_data(result_data)
+            bridge.on_creator_tree(tree_data)
+    except Exception:
+        pass
+
+    return result_data
+
+
+def _build_tree_data(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert worker result to tree visualization data."""
+    children = []
+    for child in result.get("children", []):
+        for cr in child.get("results", []):
+            children.append(_build_tree_data(cr))
+    return {
+        "worker_id": result.get("worker_id", "?"),
+        "task": result.get("task", ""),
+        "status": result.get("status", "waiting"),
+        "model_type": result.get("model_type", ""),
+        "children": children,
+    }
+
+
+def _push_full_tree(bridge, task: str, worker_configs: list, results: list) -> None:
+    """Push the full parallel worker tree to the TUI, showing all workers."""
+    completed_ids = {r["worker_id"] for r in results}
+    children = []
+    for wc in worker_configs:
+        wid = wc["worker_id"]
+        matching = [r for r in results if r["worker_id"] == wid]
+        if matching:
+            children.append(_build_tree_data(matching[0]))
+        else:
+            children.append({
+                "worker_id": wid,
+                "task": wc.get("task", ""),
+                "status": "working",
+                "model_type": wc.get("model_type", ""),
+                "children": [],
+            })
+
+    tree_data = {
+        "worker_id": "orchestrator",
+        "task": task[:60],
+        "status": "working" if len(completed_ids) < len(worker_configs) else "done",
+        "model_type": "creator",
+        "children": children,
+    }
+    try:
+        bridge.on_creator_tree(tree_data)
+    except Exception:
+        pass
 
 
 # ─── Orchestrator ───────────────────────────────────────────────────
@@ -378,6 +487,8 @@ def run_creator_mode(
     task: str,
     tools: List[BaseTool],
     project_context: str = "",
+    depth: int = 0,
+    parent_worker_id: str = "",
 ) -> Dict[str, Any]:
     """Запустить Creator Mode для задачи.
 
@@ -385,6 +496,8 @@ def run_creator_mode(
         task: Основная задача пользователя
         tools: Список инструментов доступных агентам
         project_context: Контекст проекта (структура, etc.)
+        depth: Current recursion depth (0 = root)
+        parent_worker_id: Parent worker ID for nested spawns
 
     Returns:
         {"status", "workers", "elapsed", "results"}
@@ -448,7 +561,10 @@ def run_creator_mode(
     # === Фаза 3: Маршрутизация ===
     worker_configs: List[Dict[str, Any]] = []
     for i, subtask in enumerate(subtasks):
-        worker_id = f"W-{i + 1}"
+        if parent_worker_id:
+            worker_id = f"{parent_worker_id}.{i + 1}"
+        else:
+            worker_id = f"W-{i + 1}"
 
         if local_available:
             complexity = classify_task_complexity(subtask, plan_steps=0)
@@ -496,6 +612,15 @@ def run_creator_mode(
 
     results: List[Dict[str, Any]] = []
 
+    # Push initial full tree to TUI showing all workers as pending
+    try:
+        from Interface.tui_bridge import get_bridge
+        bridge = get_bridge()
+        if bridge:
+            _push_full_tree(bridge, task, worker_configs, results)
+    except Exception:
+        bridge = None
+
     try:
         effective_workers = min(max_workers, len(worker_configs))
         with ThreadPoolExecutor(max_workers=effective_workers) as executor:
@@ -511,6 +636,7 @@ def run_creator_mode(
                     model_name=wc["model_name"],
                     display=display,
                     project_context=project_context,
+                    depth=depth,
                 )
                 futures[future] = wc["worker_id"]
 
@@ -531,6 +657,8 @@ def run_creator_mode(
                     })
                     if display:
                         display.update_worker(worker_id, status="error", result_preview=str(e)[:80])
+                if bridge:
+                    _push_full_tree(bridge, task, worker_configs, results)
 
     except KeyboardInterrupt:
         print_warning("Creator Mode прерван пользователем")

@@ -7,7 +7,22 @@ langchain-openai>=0.1.0
 langgraph>=0.0.20
 # Beautiful terminal output (Claude Code-like UI)
 rich>=13.0.0
+# Full-screen TUI framework (with syntax highlighting for TextArea)
+textual[syntax]>=1.0.0
+# Advanced input with autocomplete and history
+prompt_toolkit>=3.0.0
+# ASCII charts in terminal
+plotext>=5.0.0
+# Terminal animations and effects
+asciimatics>=1.15.0
+# Embedded terminal emulator widget for Textual
+textual-terminal>=0.3.0
+pyte>=0.8.1
 # Web search (DuckDuckGo/Bing/Google metasearch, no API key needed)
 ddgs>=9.0.0
+# Git integration for versioning and rollback
+gitpython>=3.1.0
 # Optional: PDF generation (falls back to .txt if missing)
 reportlab>=4.0.0
+# ASCII art for splash screen
+pyfiglet>=0.8.0

@@ -94,15 +94,24 @@ def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[
     if AUTO_CONFIRM:
         ans = "y"
     else:
-        with pause_live_display():
-            try:
-                import sys
-                if not sys.stdin.isatty():
+        from Interface.tui_bridge import get_bridge
+        bridge = get_bridge()
+        if bridge:
+            confirmed = bridge.request_confirmation(
+                f"Run command?",
+                f"$ {command}"
+            )
+            ans = "y" if confirmed else "n"
+        else:
+            with pause_live_display():
+                try:
+                    import sys
+                    if not sys.stdin.isatty():
+                        ans = "eof"
+                    else:
+                        ans = input(f"  Разрешить выполнить команду?\n  $ {command}\n  [y/N] > ").strip().lower()
+                except (EOFError, KeyboardInterrupt, RuntimeError):
                     ans = "eof"
-                else:
-                    ans = input(f"  Разрешить выполнить команду?\n  $ {command}\n  [y/N] > ").strip().lower()
-            except (EOFError, KeyboardInterrupt, RuntimeError):
-                ans = "eof"
 
     if ans == "eof":
         return {
