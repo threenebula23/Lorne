@@ -55,6 +55,21 @@ CYAN = "#06B6D4"
 ORANGE = "#F97316"
 
 MODES = ["Normal", "Creator", "Agent", "Research"]
+MARKDOWN_SYNTAX_THEME_MAP = {
+    "monokai": "monokai",
+    "dracula": "dracula",
+    "github_dark": "github-dark",
+    "github_light": "github-light",
+    "vs_dark": "vscode-dark",
+    "vscode_dark": "vscode-dark",
+    "nord": "nord",
+    "one_dark": "one-dark",
+    "one_light": "one-light",
+    "material": "material",
+    "zenburn": "zenburn",
+    "solarized_dark": "solarized-dark",
+    "solarized_light": "solarized-light",
+}
 
 
 class AIChatPanel(Vertical):
@@ -99,6 +114,22 @@ class AIChatPanel(Vertical):
             tree.root.add_leaf(Text("No agents running", style=DIM))
         except Exception:
             pass
+
+    def _ui_colors(self) -> Dict[str, str]:
+        try:
+            from Interface.ui_prefs import load_prefs
+            from Interface.themes import get_theme
+            prefs = load_prefs()
+            theme = get_theme(str(prefs.get("theme", "Purple Dark")))
+            accent = str(prefs.get("accent_color") or theme.get("accent") or PURPLE)
+            return {
+                "accent": accent,
+                "accent2": str(theme.get("accent2", PURPLE_LIGHT)),
+                "fg": str(theme.get("fg", "#E5E7EB")),
+                "fg2": str(theme.get("fg2", GRAY)),
+            }
+        except Exception:
+            return {"accent": PURPLE, "accent2": PURPLE_LIGHT, "fg": "#E5E7EB", "fg2": GRAY}
 
     def _build_input_area(self) -> None:
         area = self.query_one("#chat-input-area", Vertical)
@@ -176,19 +207,21 @@ class AIChatPanel(Vertical):
         ))
 
     def _add_welcome(self) -> None:
+        colors = self._ui_colors()
         log = self.query_one("#chat-messages", RichLog)
-        log.write(Text("TCA — Terminal Coding Assistant", style=f"bold {PURPLE}"))
-        log.write(Text("Type a message or use /help for commands", style=DIM))
-        log.write(Text("Right-click (Ctrl+Click on Mac) for context menus", style=DIM))
-        log.write(Text("─" * 30, style=DIM))
+        log.write(Text("TCA — Terminal Coding Assistant", style=f"bold {colors['accent']}"))
+        log.write(Text("Type a message or use /help for commands", style=colors["fg2"]))
+        log.write(Text("Right-click (Ctrl+Click on Mac) for context menus", style=colors["fg2"]))
+        log.write(Text("─" * 30, style=colors["fg2"]))
 
     # ─── Public API ────────────────────────────────
 
     def add_user_message(self, text: str) -> None:
+        colors = self._ui_colors()
         log = self.query_one("#chat-messages", RichLog)
         msg = Text()
-        msg.append("You: ", style=f"bold {PURPLE_LIGHT}")
-        msg.append(text, style="#E5E7EB")
+        msg.append("You: ", style=f"bold {colors['accent2']}")
+        msg.append(text, style=colors["fg"])
         log.write(msg)
 
     def add_assistant_message(self, text: str) -> None:
@@ -198,7 +231,14 @@ class AIChatPanel(Vertical):
         header.append("🤖 AI: ", style=f"bold {GREEN}")
         log.write(header)
         try:
-            log.write(Markdown(text[:12000], code_theme="monokai"))
+            code_theme = "monokai"
+            try:
+                from Interface.ui_prefs import load_prefs
+                pref = str(load_prefs().get("syntax_theme", "monokai"))
+                code_theme = MARKDOWN_SYNTAX_THEME_MAP.get(pref, "monokai")
+            except Exception:
+                pass
+            log.write(Markdown(text[:12000], code_theme=code_theme))
         except Exception:
             for line in text[:4000].split("\n"):
                 if line.startswith("```"):
@@ -215,10 +255,11 @@ class AIChatPanel(Vertical):
         if self._is_duplicate_render(f"tool:{tool_name}:{summary[:80]}"):
             return
         log = self.query_one("#chat-messages", RichLog)
+        colors = self._ui_colors()
         msg = Text()
-        msg.append(f"  ⚡ {tool_name}", style=f"bold {PURPLE}")
+        msg.append(f"  ⚡ {tool_name}", style=f"bold {colors['accent']}")
         if summary:
-            msg.append(f"  {summary[:120]}", style=GRAY)
+            msg.append(f"  {summary[:120]}", style=colors["fg2"])
         log.write(msg)
 
     def add_tool_result(self, tool_name: str, summary: str = "") -> None:
@@ -248,7 +289,7 @@ class AIChatPanel(Vertical):
         if self._is_duplicate_render(f"info:{text[:120]}"):
             return
         log = self.query_one("#chat-messages", RichLog)
-        log.write(Text(f"  {text}", style=GRAY))
+        log.write(Text(f"  {text}", style=self._ui_colors()["fg2"]))
 
     def register_context_hint(self, path: Path) -> None:
         """Remember a file path for the user (does not start the agent)."""
@@ -259,12 +300,13 @@ class AIChatPanel(Vertical):
         if p not in self._context_hints:
             self._context_hints.append(p)
         log = self.query_one("#chat-messages", RichLog)
+        colors = self._ui_colors()
         log.write(Text(""))
-        log.write(Text("  📎 Контекст (подсказка для следующих сообщений):", style=f"bold {CYAN}"))
-        log.write(Text(f"     {p}", style="#E5E7EB"))
+        log.write(Text("  📎 Контекст (подсказка для следующих сообщений):", style=f"bold {colors['accent']}"))
+        log.write(Text(f"     {p}", style=colors["fg"]))
         log.write(Text(
             "     Агент не запущен — при необходимости ищи код в этом файле.",
-            style=DIM,
+            style=colors["fg2"],
         ))
 
     def get_context_hints(self) -> List[str]:
@@ -281,11 +323,12 @@ class AIChatPanel(Vertical):
 
     def add_separator(self, label: str = "") -> None:
         log = self.query_one("#chat-messages", RichLog)
+        colors = self._ui_colors()
         sep = Text()
-        sep.append("─" * 15, style=DIM)
+        sep.append("─" * 15, style=colors["fg2"])
         if label:
-            sep.append(f" {label} ", style=GRAY)
-            sep.append("─" * 15, style=DIM)
+            sep.append(f" {label} ", style=colors["fg2"])
+            sep.append("─" * 15, style=colors["fg2"])
         log.write(sep)
 
     def add_file_indicator(self, path: str) -> None:
@@ -351,7 +394,7 @@ class AIChatPanel(Vertical):
             self._agent_data = tree_data
             tree = self.query_one("#creator-tree", Tree)
             tree.root.remove_children()
-            tree.root.set_label(Text("🌐 Agent Pool", style=f"bold {PURPLE}"))
+            tree.root.set_label(Text("🌐 Agent Pool", style=f"bold {self._ui_colors()['accent']}"))
             self._build_tree_node(tree.root, tree_data)
             tree.root.expand_all()
         except Exception:

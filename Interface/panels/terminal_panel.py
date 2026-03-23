@@ -58,6 +58,7 @@ class TerminalPanel(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(id="term-tab-bar"):
             yield Button("+ New Tab", id="term-new-tab", variant="default")
+            yield Button("⛶", id="term-maximize", variant="default")
         yield TabbedContent(id="term-tabs")
 
     def on_mount(self) -> None:
@@ -110,6 +111,13 @@ class TerminalPanel(Vertical):
     @on(Button.Pressed, "#term-new-tab")
     def on_new_tab(self) -> None:
         self._add_terminal_tab()
+
+    @on(Button.Pressed, "#term-maximize")
+    def on_maximize_click(self) -> None:
+        if "maximized" in self.classes:
+            self.remove_class("maximized")
+        else:
+            self.add_class("maximized")
 
     @on(Button.Pressed)
     def on_button_pressed(self, event: Button.Pressed) -> None:

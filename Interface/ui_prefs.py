@@ -9,6 +9,7 @@ DEFAULT_PREFS: Dict[str, Any] = {
     "theme": "Purple Dark",
     "density": "normal",
     "syntax_theme": "monokai",
+    "accent_color": "#8B5CF6",
 }
 
 

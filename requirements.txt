@@ -26,3 +26,5 @@ gitpython>=3.1.0
 reportlab>=4.0.0
 # ASCII art for splash screen
 pyfiglet>=0.8.0
+# Image support for TCA
+pillow>=10.0.0

@@ -92,14 +92,25 @@ Header {
     min-height: 6;
 }
 
-#code-editor {
+#code-editor, #image-viewer {
     height: 2fr;
     border-bottom: solid #2D2D3D;
+}
+
+#image-viewer {
+    display: none;
 }
 
 #terminal-panel {
     height: 1fr;
     min-height: 6;
+}
+
+#terminal-panel.maximized {
+    height: 1fr;
+    min-height: 100%;
+    dock: top;
+    layer: terminal;
 }
 
 /* ─── TabbedContent Styling ─────────────────────── */
@@ -293,6 +304,29 @@ FilteredDirectoryTree > .tree--highlight {
 #settings-panel Select {
     width: 100%;
     margin: 0;
+}
+
+.palette-container {
+    height: 5;
+    padding: 0 1;
+    margin: 1 0;
+    layout: horizontal;
+    background: #151520;
+    border: solid #2D2D3D;
+}
+
+.color-swatch {
+    min-width: 6;
+    width: 6;
+    height: 3;
+    border: solid #ffffff 0%;
+    margin: 1 1 1 0;
+    text-style: bold;
+    color: #ffffff00;
+}
+
+.color-swatch:hover {
+    border: solid #ffffff 100%;
 }
 
 /* ─── Code Editor ───────────────────────────────── */

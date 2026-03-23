@@ -85,7 +85,7 @@ _LANG_MAP = {
     ".ts": "typescript", ".tsx": "typescript",
     ".json": "json",
     ".html": "html", ".htm": "html",
-    ".css": "css", ".scss": "css",
+    ".css": "css", ".scss": "css", ".sass": "css", ".less": "css",
     ".md": "markdown", ".mdx": "markdown",
     ".yaml": "yaml", ".yml": "yaml",
     ".toml": "toml",
@@ -94,8 +94,19 @@ _LANG_MAP = {
     ".java": "java",
     ".sql": "sql",
     ".sh": "bash", ".bash": "bash", ".zsh": "bash",
-    ".xml": "xml",
+    ".xml": "xml", ".svg": "xml",
     ".rb": "ruby",
+    ".php": "php",
+    ".c": "c", ".cpp": "cpp", ".h": "cpp", ".hpp": "cpp",
+    ".cs": "c_sharp",
+    ".dart": "dart",
+    ".lua": "lua",
+    ".pl": "perl",
+    ".r": "r",
+    ".swift": "swift",
+    ".kt": "kotlin",
+    ".dockerfile": "dockerfile",
+    ".makefile": "make",
 }
 
 _PYTHON_KEYWORDS = [
@@ -143,7 +154,7 @@ class TCACodeEditor(TextArea):
 
     def on_key(self, event) -> None:
         # Accept inline completion on Tab (requested UX).
-        if getattr(event, "key", "") == "tab" and getattr(self, "suggestion", ""):
+        if getattr(event, "key", "") in ("tab", "right") and getattr(self, "suggestion", ""):
             try:
                 self.insert(self.suggestion)
                 self.suggestion = ""
@@ -152,7 +163,9 @@ class TCACodeEditor(TextArea):
             except Exception:
                 pass
             return
-        super().on_key(event)
+        # Let Textual continue normal key processing via message bubbling;
+        # TextArea has no parent `on_key` method to call directly.
+        return
 
     def update_suggestion(self) -> None:
         try:
@@ -342,6 +355,13 @@ class CodeEditorPanel(Vertical):
 
         editor = TCACodeEditor.code_editor(content, language=lang, id=f"editor-{self._tab_counter}")
         editor.show_line_numbers = True
+        try:
+            from Interface.ui_prefs import load_prefs
+            from Interface.themes import SYNTAX_THEME_MAP, ensure_custom_textarea_themes
+            ensure_custom_textarea_themes(editor)
+            editor.theme = SYNTAX_THEME_MAP.get(str(load_prefs().get("syntax_theme", "monokai")), "monokai")
+        except Exception:
+            pass
         pane.mount(editor)
 
         self._open_files[key] = {
@@ -459,6 +479,13 @@ class CodeEditorPanel(Vertical):
                     id=edit_id,
                     classes="nb-cell-editor",
                 )
+                try:
+                    from Interface.ui_prefs import load_prefs
+                    from Interface.themes import SYNTAX_THEME_MAP, ensure_custom_textarea_themes
+                    ensure_custom_textarea_themes(editor)
+                    editor.theme = SYNTAX_THEME_MAP.get(str(load_prefs().get("syntax_theme", "monokai")), "monokai")
+                except Exception:
+                    pass
                 editor._nb_tab_for_autosave = tab_num  # noqa: SLF001
                 editor.show_line_numbers = True
                 scroll.mount(editor)
@@ -488,6 +515,13 @@ class CodeEditorPanel(Vertical):
                     id=edit_id,
                     classes="nb-cell-editor",
                 )
+                try:
+                    from Interface.ui_prefs import load_prefs
+                    from Interface.themes import SYNTAX_THEME_MAP, ensure_custom_textarea_themes
+                    ensure_custom_textarea_themes(md_ed)
+                    md_ed.theme = SYNTAX_THEME_MAP.get(str(load_prefs().get("syntax_theme", "monokai")), "monokai")
+                except Exception:
+                    pass
                 md_ed._nb_tab_for_autosave = tab_num  # noqa: SLF001
                 md_ed.show_line_numbers = False
                 scroll.mount(md_ed)
@@ -1070,7 +1104,12 @@ class CodeEditorPanel(Vertical):
 
     @on(TextArea.Changed)
     def on_text_changed(self, event: TextArea.Changed) -> None:
-        pass
+        try:
+            ta = event.text_area
+            if isinstance(ta, TCACodeEditor):
+                ta.update_suggestion()
+        except Exception:
+            pass
 
     def get_completions(self, prefix: str, language: str = "python") -> List[str]:
         if len(prefix) < 2:
@@ -1090,6 +1129,8 @@ class CodeEditorPanel(Vertical):
             words = set(re.findall(r"\b\w{3,}\b", editor.text))
             for w in words:
                 if w.startswith(prefix) and w != prefix:
+                    suggestions.add(w)
+                elif prefix in w and w != prefix:
                     suggestions.add(w)
 
         return sorted(suggestions)[:15]

@@ -92,6 +92,10 @@ if name == "my_awesome_tool" and isinstance(result, dict):
 "provider/": {"parallel_tool_calls": True, "native_tools": True},
 ```
 
+## Интерфейс
+
+Подробное руководство по добавлению панелей, кнопок и стилей: [Interface/EXTENDING.md](Interface/EXTENDING.md).
+
 ## Creator Mode
 
 Параллельное выполнение подзадач несколькими агентами.

@@ -116,6 +116,8 @@
 | **`splash.py`**, **`input_widget.py`**, **`path_loading.py`** | Вспомогательные виджеты/экраны. |
 | **`tui_app.tcss`** | Стили Textual для IDE. |
 
+Подробный разбор архитектуры TUI, моста и панелей: [Interface/OVERVIEW.md](Interface/OVERVIEW.md).
+
 ### `Interface/panels/`
 
 | Файл | Панель |

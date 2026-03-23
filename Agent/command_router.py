@@ -530,6 +530,7 @@ class CommandRouter:
         parts = user_input.split(maxsplit=2)
         subcmd = parts[1].strip().lower() if len(parts) > 1 else ""
         tools = self.ctx["tools"]
+        refresh_runtime_tools = self.ctx.get("refresh_runtime_tools")
 
         if not subcmd or subcmd == "list":
             items = list_custom_tools()
@@ -579,6 +580,8 @@ class CommandRouter:
                 if result.get("warning"):
                     print_warning(result["warning"])
                 custom_new = reload_tools(tools)
+                if callable(refresh_runtime_tools):
+                    refresh_runtime_tools()
                 print_info(f"Тулы перезагружены: {len(tools)} всего")
             else:
                 print_error(f"Ошибка: {result.get('error')}")
@@ -593,6 +596,8 @@ class CommandRouter:
             if result.get("ok"):
                 print_success(f"Тул '{result.get('removed')}' удалён")
                 reload_tools(tools)
+                if callable(refresh_runtime_tools):
+                    refresh_runtime_tools()
                 print_info(f"Тулы перезагружены: {len(tools)} всего")
             else:
                 print_error(f"Ошибка: {result.get('error')}")
@@ -600,6 +605,8 @@ class CommandRouter:
 
         if subcmd == "reload":
             custom_new = reload_tools(tools)
+            if callable(refresh_runtime_tools):
+                refresh_runtime_tools()
             print_success(f"Custom tools перезагружены: {len(custom_new)} кастомных, {len(tools)} всего")
             return True
 

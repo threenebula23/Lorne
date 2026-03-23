@@ -133,6 +133,18 @@ _tool_map = build_tool_map(tools)
 if _custom:
     print_info(f"Custom tools: загружено {len(_custom)} тулов")
 
+
+def _refresh_runtime_tools() -> None:
+    """Rebuild tool map and rebind current LLM runtime."""
+    global _tool_map, llm_with_tools, agent_graph
+    _tool_map = build_tool_map(tools)
+    if llm is not None:
+        llm_with_tools = bind_tools_safe(llm, MODEL_NAME, tools)
+    if agent_graph is not None and llm_with_tools is not None:
+        agent_graph.rebuild(llm_with_tools, MODEL_NAME, is_reasoning_model(MODEL_NAME))
+        agent_graph.llm_raw = llm
+        agent_graph.tool_map = _tool_map
+
 # ─── Project analysis ──────────────────────────────────────────────
 _SKIP_DIRS = {
     ".git", ".idea", "__pycache__", "node_modules", ".venv", "venv",
@@ -536,6 +548,7 @@ def run_coding_agent_loop():
         "print_creator_details": _print_creator_details,
         "run_and_render": _run_and_render,
         "agent_graph": agent_graph,
+        "refresh_runtime_tools": _refresh_runtime_tools,
     }
     router = CommandRouter(cmd_ctx)
 
@@ -755,6 +768,7 @@ def run_tui_mode():
                     "print_creator_details": _print_creator_details,
                     "run_and_render": lambda old_len: _tui_run(old_len, messages, bridge),
                     "agent_graph": agent_graph,
+                    "refresh_runtime_tools": _refresh_runtime_tools,
                 }
 
                 from Agent.command_router import CommandRouter

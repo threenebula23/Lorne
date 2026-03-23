@@ -24,6 +24,22 @@ SKIP_DIRS = {
     ".next", ".nuxt", ".DS_Store", ".tca",
 }
 
+SYNTAX_THEME_MAP = {
+    "monokai": "monokai",
+    "dracula": "dracula",
+    "github_dark": "github_dark",
+    "github_light": "github_light",
+    "vs_dark": "vs_dark",
+    "vscode_dark": "vscode_dark",
+    "nord": "nord",
+    "one_dark": "one_dark",
+    "one_light": "one_light",
+    "material": "material",
+    "zenburn": "zenburn",
+    "solarized_dark": "solarized_dark",
+    "solarized_light": "solarized_light",
+}
+
 _FILE_ICONS = {
     ".py": "🐍", ".pyw": "🐍",
     ".js": "📜", ".jsx": "⚛️", ".mjs": "📜",
@@ -107,6 +123,8 @@ class FileExplorerPanel(Vertical):
         self._clipboard: Optional[Path] = None
         self._clipboard_cut = False
         self._staged_files: List[str] = []
+        self._swatch_map: Dict[str, str] = {}
+        self._last_tree_refresh = 0.0
 
     def compose(self) -> ComposeResult:
         with TabbedContent("Files", "Git", "Settings"):
@@ -129,11 +147,21 @@ class FileExplorerPanel(Vertical):
     def on_mount(self) -> None:
         self._populate_git_staging()
         self._populate_settings()
-        self.set_interval(20.0, self._auto_refresh)
+        self.set_interval(60.0, self._auto_refresh)
 
     def _auto_refresh(self) -> None:
+        import time
+        try:
+            tabs = self.query_one(TabbedContent)
+            if getattr(tabs, "active", "") != "tab-files":
+                return
+        except Exception:
+            pass
+        if (time.time() - self._last_tree_refresh) < 1.0:
+            return
         try:
             self.query_one("#dir-tree", FilteredDirectoryTree).reload()
+            self._last_tree_refresh = time.time()
         except Exception:
             pass
 
@@ -243,37 +271,56 @@ class FileExplorerPanel(Vertical):
 
         container.mount(Label("── 🎨 Syntax Highlighting ── (global)"))
         syn = prefs.get("syntax_theme", "monokai")
-        syn_alias_to_actual = {
-            "monokai": "monokai",
-            "dracula": "dracula",
-            "github_dark": "github_light",
-            "github_light": "github_light",
-            "css": "css",
-            "vs_dark": "vscode_dark",
-            "vscode_dark": "vscode_dark",
-            "nord": "vscode_dark",
-        }
-        syn_opts = tuple(syn_alias_to_actual.keys())
+        syn_opts = tuple(SYNTAX_THEME_MAP.keys())
         if syn not in syn_opts:
             syn = "monokai"
-        syn_actual = syn_alias_to_actual.get(syn, "monokai")
+        syn_actual = SYNTAX_THEME_MAP.get(syn, "monokai")
         container.mount(Select(
             [
                 ("Monokai", "monokai"),
                 ("Dracula", "dracula"),
                 ("GitHub Dark", "github_dark"),
+                ("GitHub Light", "github_light"),
                 ("VS Dark", "vs_dark"),
                 ("Nord", "nord"),
+                ("One Dark", "one_dark"),
+                ("One Light", "one_light"),
+                ("Material", "material"),
+                ("Zenburn", "zenburn"),
+                ("Solarized Dark", "solarized_dark"),
+                ("Solarized Light", "solarized_light"),
             ],
             value=syn, id="fe-syntax-select", allow_blank=False,
         ))
 
+        container.mount(Label("── 🎨 Accent Color ── (global)"))
+        accent_val = prefs.get("accent_color", "#8B5CF6")
+
+        colors = [
+            "#8B5CF6", "#A78BFA", "#7C3AED", "#6366F1", "#3B82F6", "#06B6D4", "#10B981", "#22C55E",
+            "#84CC16", "#EAB308", "#F59E0B", "#F97316", "#EF4444", "#EC4899", "#D946EF", "#14B8A6",
+            "#0EA5E9", "#2563EB", "#4F46E5", "#9333EA", "#DB2777", "#DC2626", "#111827", "#FFFFFF",
+        ]
+        self._swatch_map.clear()
+        for idx, c in enumerate(colors):
+            btn_id = f"color-swatch-{idx}"
+            self._swatch_map[btn_id] = c
+
+        container.mount(Input(
+            value=accent_val,
+            placeholder="#RRGGBB",
+            id="fe-accent-input",
+        ))
+        container.mount(Button("🎨 Палитра", id="fe-palette-btn"))
+
         try:
+            from Interface.themes import ensure_custom_textarea_themes
             apply_theme(self.app, theme_val)
             for d in ("compact", "normal", "spacious"):
                 self.app.remove_class(f"density-{d}")
             self.app.add_class(f"density-{dens}")
             for ta in self.app.query(TextArea):
+                ensure_custom_textarea_themes(ta)
                 ta.theme = syn_actual
         except Exception:
             pass
@@ -303,55 +350,59 @@ class FileExplorerPanel(Vertical):
         except Exception:
             pass
 
-    @on(Button.Pressed, "#btn-new")
-    def on_new_file(self) -> None:
-        self.action_new_file()
-
-    @on(Button.Pressed, "#btn-del")
-    def on_delete_file(self) -> None:
-        self.action_delete_file()
-
-    @on(Button.Pressed, "#btn-ren")
-    def on_rename_file(self) -> None:
-        self.action_rename_file()
-
-    @on(Button.Pressed, "#btn-run")
-    def on_run_file(self) -> None:
-        tree = self.query_one("#dir-tree", FilteredDirectoryTree)
-        if tree.cursor_node and tree.cursor_node.data:
-            p = tree.cursor_node.data.path
-            if p.is_file() and p.suffix in (".py", ".sh", ".js", ".ts"):
-                self.post_message(RunFileRequested(p))
-            else:
-                self.notify("Select a runnable file (.py, .sh, .js)", severity="warning")
-
-    @on(Button.Pressed, "#btn-ctx")
-    def on_add_context(self) -> None:
-        tree = self.query_one("#dir-tree", FilteredDirectoryTree)
-        if tree.cursor_node and tree.cursor_node.data:
-            p = tree.cursor_node.data.path
-            if p.is_file():
-                self.post_message(AddToContext(p))
-                self.notify(f"Added to context: {p.name}")
-
-    @on(Button.Pressed, "#btn-refresh")
-    def on_refresh(self) -> None:
-        self.refresh_tree()
-        self.notify("Refreshed")
-
-    @on(Button.Pressed, "#commit-btn")
-    def on_commit(self) -> None:
-        try:
-            inp = self.query_one("#commit-input", Input)
-            msg = inp.value.strip()
-            if not msg:
-                self.notify("Enter a commit message", severity="warning")
+    @on(Button.Pressed)
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+        if btn_id.startswith("color-swatch-"):
+            color = self._swatch_map.get(btn_id)
+            if not color:
                 return
-            self.post_message(GitCommitRequested(msg, self._staged_files))
-            inp.value = ""
-            self.notify("Commit created")
-        except Exception as e:
-            self.notify(f"Commit error: {e}", severity="error")
+            self.query_one("#fe-accent-input", Input).value = color
+            self._apply_accent_color(color)
+            return
+        elif btn_id == "btn-new":
+            self.action_new_file()
+        elif btn_id == "btn-del":
+            self.action_delete_file()
+        elif btn_id == "btn-ren":
+            self.action_rename_file()
+        elif btn_id == "btn-run":
+            tree = self.query_one("#dir-tree", FilteredDirectoryTree)
+            if tree.cursor_node and tree.cursor_node.data:
+                p = tree.cursor_node.data.path
+                if p.is_file() and p.suffix in (".py", ".sh", ".js", ".ts"):
+                    self.post_message(RunFileRequested(p))
+                else:
+                    self.notify("Select a runnable file (.py, .sh, .js)", severity="warning")
+        elif btn_id == "btn-ctx":
+            tree = self.query_one("#dir-tree", FilteredDirectoryTree)
+            if tree.cursor_node and tree.cursor_node.data:
+                p = tree.cursor_node.data.path
+                if p.is_file():
+                    self.post_message(AddToContext(p))
+                    self.notify(f"Added to context: {p.name}")
+        elif btn_id == "btn-refresh":
+            self.refresh_tree()
+            self.notify("Refreshed")
+        elif btn_id == "commit-btn":
+            try:
+                inp = self.query_one("#commit-input", Input)
+                msg = inp.value.strip()
+                if not msg:
+                    self.notify("Enter a commit message", severity="warning")
+                    return
+                self.post_message(GitCommitRequested(msg, self._staged_files))
+                inp.value = ""
+                self.notify("Commit created")
+            except Exception as e:
+                self.notify(f"Commit error: {e}", severity="error")
+        elif btn_id == "fe-palette-btn":
+            def _on_color_selected(selected: Optional[str]) -> None:
+                if not selected:
+                    return
+                self.query_one("#fe-accent-input", Input).value = selected
+                self._apply_accent_color(selected)
+            self.app.push_screen(_ColorPaletteDialog(self._swatch_map, _on_color_selected))
 
     @on(Select.Changed, "#fe-theme-select")
     def on_theme_change(self, event: Select.Changed) -> None:
@@ -385,23 +436,34 @@ class FileExplorerPanel(Vertical):
         if not event.value or event.value == Select.BLANK:
             return
         theme = str(event.value)
-        theme_actual = {
-            "monokai": "monokai",
-            "dracula": "dracula",
-            "github_dark": "github_light",
-            "github_light": "github_light",
-            "css": "css",
-            "vs_dark": "vscode_dark",
-            "vscode_dark": "vscode_dark",
-            "nord": "vscode_dark",
-        }.get(theme, "monokai")
+        theme_actual = SYNTAX_THEME_MAP.get(theme, "monokai")
         try:
+            from Interface.themes import ensure_custom_textarea_themes
             for ta in self.app.query(TextArea):
+                ensure_custom_textarea_themes(ta)
                 ta.theme = theme_actual
             from Interface.ui_prefs import save_prefs
             save_prefs(syntax_theme=theme)
         except Exception:
             pass
+
+    @on(Input.Changed, "#fe-accent-input")
+    def on_accent_color_change(self, event: Input.Changed) -> None:
+        color = event.value.strip()
+        if not color.startswith("#") or len(color) < 4:
+            return
+        self._apply_accent_color(color)
+
+    def _apply_accent_color(self, color: str) -> None:
+        """Apply and persist accent color."""
+        try:
+            from Interface.themes import apply_theme
+            from Interface.ui_prefs import save_prefs, load_prefs
+            prefs = load_prefs()
+            save_prefs(accent_color=color)
+            apply_theme(self.app, prefs.get("theme", "Purple Dark"))
+        except Exception as e:
+            self.notify(f"Color error: {e}", severity="error")
 
     def action_show_menu(self) -> None:
         tree = self.query_one("#dir-tree", FilteredDirectoryTree)
@@ -534,8 +596,12 @@ class FileExplorerPanel(Vertical):
         )
 
     def refresh_tree(self) -> None:
+        import time
+        if (time.time() - self._last_tree_refresh) < 0.5:
+            return
         try:
             self.query_one("#dir-tree", FilteredDirectoryTree).reload()
+            self._last_tree_refresh = time.time()
         except Exception:
             pass
 
@@ -670,3 +736,61 @@ class _ContextMenuDialog(ModalScreen):
     def on_key(self, event) -> None:
         if event.key == "escape":
             self.dismiss()
+
+
+class _ColorPaletteDialog(ModalScreen):
+    DEFAULT_CSS = """
+    _ColorPaletteDialog { align: center middle; }
+    #palette-container {
+        width: 64; height: auto; max-height: 14;
+        background: #1a1a2e; border: solid #8B5CF6; padding: 1 2;
+    }
+    #palette-grid { height: auto; layout: horizontal; margin: 1 0; }
+    #palette-grid Button { min-width: 6; width: 6; height: 3; margin: 0 1 1 0; }
+    """
+
+    def __init__(self, colors_by_id: Dict[str, str], callback):
+        super().__init__()
+        self._colors = list(colors_by_id.values())
+        self._callback = callback
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="palette-container"):
+            yield Label("Выберите цвет акцента")
+            with Horizontal(id="palette-row-0"):
+                for i in range(0, min(8, len(self._colors))):
+                    yield Button("  ", id=f"palette-pick-{i}")
+            with Horizontal(id="palette-row-1"):
+                for i in range(8, min(16, len(self._colors))):
+                    yield Button("  ", id=f"palette-pick-{i}")
+            with Horizontal(id="palette-row-2"):
+                for i in range(16, min(24, len(self._colors))):
+                    yield Button("  ", id=f"palette-pick-{i}")
+            yield Button("Отмена", id="palette-cancel")
+
+    def on_mount(self) -> None:
+        try:
+            self.query_one("#palette-cancel", Button).styles.margin = (1, 0, 0, 0)
+        except Exception:
+            pass
+        for i, color in enumerate(self._colors):
+            try:
+                btn = self.query_one(f"#palette-pick-{i}", Button)
+                btn.styles.background = color
+            except Exception:
+                pass
+
+    @on(Button.Pressed)
+    def on_palette_click(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+        if btn_id == "palette-cancel":
+            self.dismiss()
+            if self._callback:
+                self._callback(None)
+            return
+        if btn_id.startswith("palette-pick-"):
+            idx = int(btn_id.replace("palette-pick-", ""))
+            if 0 <= idx < len(self._colors):
+                self.dismiss()
+                if self._callback:
+                    self._callback(self._colors[idx])

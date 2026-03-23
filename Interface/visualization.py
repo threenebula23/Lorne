@@ -309,9 +309,30 @@ def _display_read_file_result(result: Dict[str, Any]) -> None:
         preview = content[:2000] if len(content) > 2000 else content
         if preview != content:
             preview += "\n… (обрезано)"
+        syntax_theme = "monokai"
+        try:
+            from Interface.ui_prefs import load_prefs
+            _syn = str(load_prefs().get("syntax_theme", "monokai"))
+            syntax_theme = {
+                "monokai": "monokai",
+                "dracula": "dracula",
+                "github_dark": "github-dark",
+                "github_light": "github-light",
+                "vs_dark": "vscode-dark",
+                "vscode_dark": "vscode-dark",
+                "nord": "nord",
+                "one_dark": "one-dark",
+                "one_light": "one-light",
+                "material": "material",
+                "zenburn": "zenburn",
+                "solarized_dark": "solarized-dark",
+                "solarized_light": "solarized-light",
+            }.get(_syn, "monokai")
+        except Exception:
+            pass
         console.print(
             Panel(
-                Syntax(preview, lang, theme="monokai", line_numbers=True, word_wrap=True),
+                Syntax(preview, lang, theme=syntax_theme, line_numbers=True, word_wrap=True),
                 title=f"[bold]{short}[/bold] [dim]({total} строк)[/dim]",
                 title_align="left",
                 border_style="cyan",

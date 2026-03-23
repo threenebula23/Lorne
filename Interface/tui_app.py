@@ -24,6 +24,7 @@ from .panels.version_control import VersionControlPanel, BranchSwitched
 from .panels.ai_chat import (
     AIChatPanel, ChatSubmitted, ModelChanged, ModeToggled, StopRequested,
 )
+from .panels.image_viewer import ImageViewerPanel
 
 
 class ResizeHandle(Widget):
@@ -108,9 +109,10 @@ class TCAApp(App):
 
     CSS_PATH = "tui_app.tcss"
     TITLE = "TCA — Terminal Coding Assistant"
+    LAYERS = ["base", "terminal", "overlay"]
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Exit", show=True, priority=True),
+        Binding("ctrl+q", "quit", "Exit", show=True, priority=True),
         Binding("ctrl+s", "save_file", "Save", show=False),
         Binding("ctrl+f", "toggle_find", "Find", show=False),
         Binding("ctrl+g", "goto_line", "Go to Line", show=False),
@@ -126,6 +128,7 @@ class TCAApp(App):
         Binding("f8", "resize_right_smaller", "Right -", show=False),
         Binding("f9", "resize_right_larger", "Right +", show=False),
         Binding("f10", "resize_bottom_toggle", "Toggle Terminal", show=False),
+        Binding("ctrl+shift+t", "toggle_terminal_fullscreen", "Maximize Terminal", show=False),
     ]
 
     def __init__(
@@ -154,7 +157,6 @@ class TCAApp(App):
         yield Header()
         with Horizontal(id="top-bar"):
             yield Button("✕ Exit", id="app-exit-btn")
-            yield Static(f"  {self._model_name}", id="top-model-label")
         with Horizontal(id="main"):
             with Vertical(id="col-left"):
                 yield FileExplorerPanel(id="file-explorer")
@@ -165,6 +167,7 @@ class TCAApp(App):
             )
             with Vertical(id="col-center"):
                 yield CodeEditorPanel(id="code-editor")
+                yield ImageViewerPanel(id="image-viewer")
                 yield TerminalPanel(id="terminal-panel")
             yield ResizeHandle(
                 target_id="ai-chat", direction="right",
@@ -207,11 +210,23 @@ class TCAApp(App):
     def status_bar(self) -> Static:
         return self.query_one("#status-bar", Static)
 
+    @property
+    def image_viewer(self) -> ImageViewerPanel:
+        return self.query_one("#image-viewer", ImageViewerPanel)
+
     # ─── Message handlers ──────────────────────────
 
     @on(FileSelected)
     def on_file_open(self, event: FileSelected) -> None:
-        self.code_editor.open_file(event.path)
+        p = event.path
+        if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".ico"):
+            self.code_editor.display = False
+            self.image_viewer.display = True
+            self.image_viewer.show_image(p)
+        else:
+            self.image_viewer.display = False
+            self.code_editor.display = True
+            self.code_editor.open_file(p)
 
     @on(AddToContext)
     def on_add_to_context(self, event: AddToContext) -> None:
@@ -279,10 +294,6 @@ class TCAApp(App):
     def on_model_changed(self, event: ModelChanged) -> None:
         self._model_name = event.model_id
         self._update_status()
-        try:
-            self.query_one("#top-model-label", Static).update(f"  {event.model_id}")
-        except Exception:
-            pass
         if self._on_model_change:
             self._on_model_change(event.model_id)
 
@@ -380,6 +391,16 @@ class TCAApp(App):
         try:
             term = self.query_one("#terminal-panel", TerminalPanel)
             term.display = not term.display
+        except Exception:
+            pass
+
+    def action_toggle_terminal_fullscreen(self) -> None:
+        try:
+            term = self.query_one("#terminal-panel", TerminalPanel)
+            if "maximized" in term.classes:
+                term.remove_class("maximized")
+            else:
+                term.add_class("maximized")
         except Exception:
             pass
 
