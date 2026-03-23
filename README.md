@@ -1,8 +1,11 @@
 # TCA — Terminal Coding Assistant
 
-Терминальный ассистент кодинга на базе LLM. Работает в любом проекте прямо из консоли: читает, пишет и редактирует файлы, выполняет команды, строит планы и ведёт историю изменений с возможностью отката. Вдохновлён Claude Code.
 
-**Документация для разработчиков (модули, архитектура):** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/EXTENDING.md](docs/EXTENDING.md) · [docs/TOOLS.md](docs/TOOLS.md) · [docs/README.md](docs/README.md)
+![](./wiki/image.png)
+
+
+
+**Документация для разработчиков (модули, архитектура):** [ARCHITECTURE.md](wiki/ARCHITECTURE.md) · [EXTENDING.md](wiki/EXTENDING.md) · [TOOLS.md](wiki/TOOLS.md) · [README.md](wiki/README.md)
 
 ## Возможности
 
