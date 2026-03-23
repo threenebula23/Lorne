@@ -439,6 +439,7 @@ def run_coding_agent_loop():
 
     # Creator mode flag (mutable list so command_router can toggle it)
     creator_mode_active = [False]
+    research_mode_active = [False]
 
     # ─── Run & render ───────────────────────────────────────────
     def _run_and_render(old_len: int) -> None:
@@ -526,6 +527,7 @@ def run_coding_agent_loop():
         "format_credits_info": format_credits_info,
         "save_state": save_state,
         "creator_mode_active": creator_mode_active,
+        "research_mode_active": research_mode_active,
         "get_creator_config": get_creator_config,
         "save_creator_config": save_creator_config,
         "check_local_server": check_local_server,
@@ -585,6 +587,12 @@ def run_coding_agent_loop():
                 pass
             continue
         else:
+            if research_mode_active[0] and not user_input.startswith("/"):
+                user_input = (
+                    "[RESEARCH MODE ACTIVE]\n"
+                    "Используй web_search/web_fetch и ответь с источниками.\n\n"
+                    + user_input
+                )
             if _should_autoplan(user_input):
                 print_planning(user_input)
                 plan_spinner = LiveSpinner("Составляю план")
@@ -628,6 +636,23 @@ def run_coding_agent_loop():
 
 def run_tui_mode():
     """Launch TCA in full-screen Textual TUI mode."""
+    try:
+        from Interface.start_screen import select_project_path
+    except Exception:
+        select_project_path = None
+
+    if select_project_path is not None:
+        try:
+            chosen_path = select_project_path(Path.cwd())
+        except Exception:
+            chosen_path = Path.cwd()
+        if not chosen_path:
+            return
+        try:
+            os.chdir(Path(chosen_path).resolve())
+        except Exception:
+            pass
+
     try:
         from Interface.tui_app import TCAApp
         from Interface.tui_bridge import TUIBridge, set_bridge
@@ -676,6 +701,7 @@ def run_tui_mode():
         git_branch = ""
 
     creator_mode_active = [False]
+    research_mode_active = [False]
     tui_agent_mode = ["normal"]
 
     def _format_creator_summary(cr: Dict[str, Any]) -> str:
@@ -720,6 +746,7 @@ def run_tui_mode():
                     "format_credits_info": format_credits_info,
                     "save_state": save_state,
                     "creator_mode_active": creator_mode_active,
+                    "research_mode_active": research_mode_active,
                     "get_creator_config": get_creator_config,
                     "save_creator_config": save_creator_config,
                     "check_local_server": check_local_server,
@@ -743,6 +770,7 @@ def run_tui_mode():
                 mode = (tui_agent_mode[0] or "normal").lower()
                 human_content = text
                 if mode == "research" and not text.strip().lower().startswith("/"):
+                    bridge.on_info("🔬 Research mode active")
                     human_content = (
                         "[Research mode — use web_search, web_fetch, multiple sources]\n\n"
                         + text
@@ -836,7 +864,6 @@ def run_tui_mode():
             try:
                 set_model(model_id)
                 _init_llm()
-                bridge.on_success(f"Model: {MODEL_NAME}")
             except Exception as e:
                 bridge.on_error(f"Model error: {e}")
         threading.Thread(target=_work, daemon=True).start()
@@ -848,15 +875,34 @@ def run_tui_mode():
             mode_lower = "normal"
         tui_agent_mode[0] = mode_lower
         creator_mode_active[0] = mode_lower == "creator"
+        research_mode_active[0] = mode_lower == "research"
         try:
             if mode_lower == "creator":
-                bridge.on_success("Creator mode ON — tasks will be split into sub-agents")
+                app.call_from_thread(
+                    app.chat.update_creator_tree,
+                    {"worker_id": "creator", "status": "working", "task": "Creator mode", "children": []},
+                )
             elif mode_lower == "research":
-                bridge.on_success("Research mode ON — will use web tools for analysis")
+                app.call_from_thread(
+                    app.chat.update_creator_tree,
+                    {
+                        "worker_id": "research",
+                        "status": "working",
+                        "task": "Research mode",
+                        "model_type": "research",
+                        "children": [{"worker_id": "web-search", "status": "working", "task": "Web + docs"}],
+                    },
+                )
             elif mode_lower == "agent":
-                bridge.on_success("Agent mode ON — autonomous task execution")
+                app.call_from_thread(
+                    app.chat.update_creator_tree,
+                    {"worker_id": "agent", "status": "working", "task": "Agent mode", "children": []},
+                )
             else:
-                bridge.on_info(f"Mode: {mode_lower}")
+                app.call_from_thread(
+                    app.chat.update_creator_tree,
+                    {"worker_id": "idle", "status": "pending", "task": "No active mode", "children": []},
+                )
         except Exception:
             pass
 

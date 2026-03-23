@@ -125,7 +125,7 @@ class TUIBridge:
 
     def on_file_changed(self, path: str = "") -> None:
         now = time.time()
-        if now - self._last_file_refresh < 2.0:
+        if now - self._last_file_refresh < 1.5:
             return
         self._last_file_refresh = now
         self._call(self.app.file_explorer.refresh_tree)

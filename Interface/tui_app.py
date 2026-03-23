@@ -148,6 +148,7 @@ class TCAApp(App):
         self._bridge = None
         self._left_width = 28
         self._right_width = 38
+        self._mode_name = "normal"
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -287,6 +288,8 @@ class TCAApp(App):
 
     @on(ModeToggled)
     def on_mode_toggled(self, event: ModeToggled) -> None:
+        self._mode_name = str(event.mode or "normal")
+        self._update_status()
         if self._on_mode_toggle:
             self._on_mode_toggle(event.mode)
 
@@ -398,6 +401,7 @@ class TCAApp(App):
             parts.append(f"{tokens}")
         if rag:
             parts.append(f"RAG: {rag}")
+        parts.append(f"MODE: {self._mode_name.upper()}")
         parts.append("F10: term  M: menu")
         self.status_bar.update(" │ ".join(parts) if parts else "")
 

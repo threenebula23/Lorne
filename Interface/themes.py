@@ -161,6 +161,19 @@ def get_theme(name: str) -> ThemeColors:
 def apply_theme(app, theme_name: str) -> None:
     """Apply a theme to the TCA app by setting CSS variables on all major widgets."""
     t = get_theme(theme_name)
+    # CSS fallback classes for handcrafted theme blocks in tui_app.tcss
+    try:
+        for cls in ("theme-monokai", "theme-green", "theme-blue"):
+            app.remove_class(cls)
+        name_low = (theme_name or "").lower()
+        if "monokai" in name_low:
+            app.add_class("theme-monokai")
+        elif "green" in name_low:
+            app.add_class("theme-green")
+        elif "blue" in name_low:
+            app.add_class("theme-blue")
+    except Exception:
+        pass
 
     def _s(widget, **kwargs):
         for attr, val in kwargs.items():

@@ -9,7 +9,7 @@ from rich.text import Text
 
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
     Button, Checkbox, Input, Label, Static,
     TabbedContent, TabPane, Tree,
@@ -35,7 +35,7 @@ class VersionControlPanel(Vertical):
     def compose(self) -> ComposeResult:
         with TabbedContent("Branches", "History"):
             with TabPane("Branches", id="tab-branches"):
-                yield Vertical(id="branches-content")
+                yield VerticalScroll(id="branches-content")
             with TabPane("History", id="tab-history"):
                 yield Tree("Commits", id="history-tree")
 
@@ -54,7 +54,7 @@ class VersionControlPanel(Vertical):
             self._gm = None
 
     def _populate_branches(self) -> None:
-        container = self.query_one("#branches-content", Vertical)
+        container = self.query_one("#branches-content", VerticalScroll)
         if not self._gm:
             container.mount(Label("  Git not available"))
             return
@@ -62,7 +62,6 @@ class VersionControlPanel(Vertical):
         current = self._gm.current_branch()
         container.mount(Label(
             f"  ⎇ Current: {current}",
-            id="current-branch",
         ))
 
         with self.app.batch_update():
@@ -87,16 +86,22 @@ class VersionControlPanel(Vertical):
             ))
 
             status = self._gm.status_summary()
-            changed = (
+            changed_raw = (
                 status.get("changed", [])
                 + status.get("staged", [])
                 + status.get("untracked", [])
             )
+            changed: List[str] = []
+            seen: Set[str] = set()
+            for f in changed_raw:
+                if f not in seen:
+                    seen.add(f)
+                    changed.append(f)
             if changed:
                 container.mount(Static("── Git Staging ──", classes="staging-header"))
                 # IDs must be unique: paths like ".tca/x" and ".tca_x" collide if we only
                 # replace "/" and "." → use index (path is on _file_path for handlers).
-                for i, f in enumerate(changed[:30]):
+                for i, f in enumerate(changed):
                     cat = "M"
                     if f in status.get("untracked", []):
                         cat = "?"
@@ -105,13 +110,16 @@ class VersionControlPanel(Vertical):
                         self._staged_files.add(f)
 
                     color = {"M": "#F59E0B", "?": "#EF4444", "S": "#10B981"}.get(cat, "#6B7280")
+                    is_selected = (cat == "S")
+                    marker = "✓" if is_selected else "○"
                     cb = Checkbox(
-                        f"[{cat}] {f}",
-                        value=(cat == "S"),
+                        f"{marker} [{cat}] {f}",
+                        value=is_selected,
                         id=f"stage-file-{i}",
                         classes="stage-checkbox",
                     )
                     cb._file_path = f
+                    cb._cat = cat
                     container.mount(cb)
 
                 container.mount(Input(
@@ -157,12 +165,31 @@ class VersionControlPanel(Vertical):
     def on_stage_toggle(self, event: Checkbox.Changed) -> None:
         cb = event.checkbox
         file_path = getattr(cb, "_file_path", None)
+        cat = getattr(cb, "_cat", "M")
         if not file_path:
             return
         if event.value:
             self._staged_files.add(file_path)
+            if self._gm and self._gm.repo:
+                try:
+                    self._gm.repo.index.add([file_path])
+                except Exception:
+                    pass
+            try:
+                cb.label = f"✓ [{cat}] {file_path}"
+            except Exception:
+                pass
         else:
             self._staged_files.discard(file_path)
+            if self._gm and self._gm.repo:
+                try:
+                    self._gm.repo.git.reset("HEAD", "--", file_path)
+                except Exception:
+                    pass
+            try:
+                cb.label = f"○ [{cat}] {file_path}"
+            except Exception:
+                pass
 
     @on(Button.Pressed)
     def on_button(self, event: Button.Pressed) -> None:
@@ -284,7 +311,7 @@ class VersionControlPanel(Vertical):
             self.notify(f"Push error: {e}", severity="error")
 
     def _refresh(self) -> None:
-        container = self.query_one("#branches-content", Vertical)
+        container = self.query_one("#branches-content", VerticalScroll)
         container.remove_children()
         self._staged_files.clear()
         self._populate_branches()

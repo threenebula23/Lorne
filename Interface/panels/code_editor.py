@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import io
 import re
 import subprocess
 import sys
 import threading
+import traceback
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -138,6 +141,19 @@ def _source_list_to_text(src: Any) -> str:
 class TCACodeEditor(TextArea):
     """TextArea with keyword/builtin suffix suggestions (→ accept with Right)."""
 
+    def on_key(self, event) -> None:
+        # Accept inline completion on Tab (requested UX).
+        if getattr(event, "key", "") == "tab" and getattr(self, "suggestion", ""):
+            try:
+                self.insert(self.suggestion)
+                self.suggestion = ""
+                event.stop()
+                event.prevent_default()
+            except Exception:
+                pass
+            return
+        super().on_key(event)
+
     def update_suggestion(self) -> None:
         try:
             self.suggestion = ""
@@ -191,9 +207,9 @@ class NotebookContentDirty(Message):
 
 
 class NotebookCellTextArea(TCACodeEditor):
-    """Ячейка .ipynb: высота по числу строк (минимум несколько строк для ввода)."""
+    """Ячейка .ipynb: высота по числу строк кода."""
 
-    _NB_MIN_VISIBLE_LINES = 10
+    _NB_MIN_VISIBLE_LINES = 1
     _NB_MAX_VISIBLE_LINES = 150
 
     def on_mount(self) -> None:
@@ -245,6 +261,18 @@ class CodeEditorPanel(Vertical):
         self._autocomplete_items: List[str] = []
         self._find_visible = False
         self._nb_autosave_gen_by_tab: Dict[int, int] = {}
+
+    def _parse_notebook_button_ids(self, btn_id: str, prefix: str) -> Optional[tuple[int, int, int]]:
+        """
+        Parse IDs like: <prefix>-{tab_num}-{nonce}-{cell_idx}.
+        """
+        parts = btn_id.replace(prefix, "").split("-")
+        if len(parts) < 3:
+            return None
+        try:
+            return int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            return None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="editor-toolbar"):
@@ -373,17 +401,11 @@ class CodeEditorPanel(Vertical):
             "nb_data": nb_data,
             "nb_tab_num": tab_num,
             "nb_render_nonce": 0,
+            "nb_kernel_globals": {"__name__": "__main__"},
+            "nb_exec_counter": 0,
         }
         self._render_notebook_body(key)
         tabs.active = tab_id
-
-        info = self._open_files[key]
-        self._fill_notebook_outputs(
-            self.query_one(f"#nb-scroll-{tab_num}", VerticalScroll),
-            info["nb_data"].get("cells", []),
-            tab_num,
-            info.get("nb_render_nonce", 0),
-        )
 
     def _render_notebook_body(self, key: str) -> None:
         """Rebuild notebook cell widgets from nb_data."""
@@ -404,6 +426,12 @@ class CodeEditorPanel(Vertical):
         scroll.remove_children()
         with self.app.batch_update():
             self._mount_notebook_cells(scroll, tab_num, cells, kernel, nonce)
+        self._fill_notebook_outputs(
+            scroll,
+            cells,
+            tab_num,
+            nonce,
+        )
 
     def _mount_notebook_cells(
         self,
@@ -422,6 +450,7 @@ class CodeEditorPanel(Vertical):
             if cell_type == "code":
                 scroll.mount(Static(
                     f"[bold #8B5CF6]In [{exec_count or ' '}]:[/]",
+                    id=f"nb-in-{tab_num}-{nonce}-{ci}",
                     classes="nb-cell-header",
                 ))
                 editor = NotebookCellTextArea.code_editor(
@@ -570,19 +599,21 @@ class CodeEditorPanel(Vertical):
             self._save_notebook_file(tab_num, silent=True)
 
     def _notebook_restart_kernel(self, tab_num: int) -> None:
-        """Сброс вывода и счётчиков; TCA запускает код в отдельном процессе."""
+        """Сброс вывода/счётчиков и состояния in-memory ядра."""
         key = self._notebook_key_for_tabnum(tab_num)
         if not key:
             return
         self._sync_notebook_from_ui(key)
         info = self._open_files[key]
+        info["nb_kernel_globals"] = {"__name__": "__main__"}
+        info["nb_exec_counter"] = 0
         for cell in info["nb_data"].get("cells", []) or []:
             if cell.get("cell_type") == "code":
                 cell["execution_count"] = None
                 cell["outputs"] = []
         self._render_notebook_body(key)
         self.notify(
-            "Kernel restarted (outputs cleared; Run uses a fresh process)",
+            "Kernel restarted (state, counters and outputs cleared)",
         )
         self._save_notebook_file(tab_num, silent=True)
 
@@ -674,12 +705,11 @@ class CodeEditorPanel(Vertical):
             self.action_close_tab()
 
     def _run_notebook_cell(self, btn_id: str) -> None:
-        """Run a single notebook cell via subprocess."""
-        # id format: nb-run-{tab}-{nonce}-{ci}
-        parts = btn_id.replace("nb-run-", "").split("-")
-        if len(parts) < 3:
+        """Run a single notebook cell preserving notebook state."""
+        parsed = self._parse_notebook_button_ids(btn_id, "nb-run-")
+        if not parsed:
             return
-        tab_num, nonce, cell_idx = parts[0], parts[1], parts[2]
+        tab_num, nonce, cell_idx = parsed
         try:
             editor = self.query_one(
                 f"#nb-edit-{tab_num}-{nonce}-{cell_idx}", TextArea,
@@ -697,26 +727,67 @@ class CodeEditorPanel(Vertical):
         out_log.clear()
         out_log.write(Text("Running…", style="#F59E0B"))
 
+        key = self._notebook_key_for_tabnum(tab_num)
+        if not key:
+            return
+        self._sync_notebook_from_ui(key)
+        info = self._open_files.get(key)
+        if not info:
+            return
+
         def _run():
             try:
-                result = subprocess.run(
-                    [sys.executable, "-c", code],
-                    capture_output=True, text=True, timeout=30,
-                    cwd=str(Path.cwd()),
-                )
+                stdout_io = io.StringIO()
+                stderr_io = io.StringIO()
+                g = info.setdefault("nb_kernel_globals", {"__name__": "__main__"})
+                exec_error = None
+                with redirect_stdout(stdout_io), redirect_stderr(stderr_io):
+                    try:
+                        compiled = compile(code, f"<cell {cell_idx}>", "exec")
+                        exec(compiled, g, g)
+                    except Exception:
+                        exec_error = traceback.format_exc()
+
+                stdout_text = stdout_io.getvalue()
+                stderr_text = stderr_io.getvalue()
+                if exec_error:
+                    stderr_text = (stderr_text + "\n" + exec_error).strip()
+
+                nb_cells = info.get("nb_data", {}).get("cells", []) or []
+                if 0 <= cell_idx < len(nb_cells):
+                    c = nb_cells[cell_idx]
+                    if c.get("cell_type") == "code":
+                        info["nb_exec_counter"] = int(info.get("nb_exec_counter", 0)) + 1
+                        c["execution_count"] = info["nb_exec_counter"]
+                        outputs: List[Dict[str, Any]] = []
+                        if stdout_text:
+                            outputs.append(
+                                {"name": "stdout", "output_type": "stream", "text": stdout_text}
+                            )
+                        if stderr_text:
+                            outputs.append(
+                                {"name": "stderr", "output_type": "stream", "text": stderr_text}
+                            )
+                        c["outputs"] = outputs
+
                 def _update():
                     out_log.clear()
-                    if result.stdout:
-                        out_log.write(result.stdout.rstrip())
-                    if result.stderr:
-                        out_log.write(Text(result.stderr.rstrip(), style="#EF4444"))
-                    if result.returncode != 0:
-                        out_log.write(Text(f"exit code: {result.returncode}", style="#6B7280"))
+                    if stdout_text:
+                        out_log.write(stdout_text.rstrip())
+                    if stderr_text:
+                        out_log.write(Text(stderr_text.rstrip(), style="#EF4444"))
+                    try:
+                        in_lbl = self.query_one(
+                            f"#nb-in-{tab_num}-{nonce}-{cell_idx}",
+                            Static,
+                        )
+                        in_lbl.update(
+                            f"[bold #8B5CF6]In [{info.get('nb_exec_counter', 0)}]:[/]",
+                        )
+                    except Exception:
+                        pass
                 self.app.call_from_thread(_update)
-            except subprocess.TimeoutExpired:
-                self.app.call_from_thread(
-                    out_log.write, Text("Timed out (30s)", style="#F59E0B")
-                )
+                self._save_notebook_file(tab_num, silent=True)
             except Exception as e:
                 self.app.call_from_thread(
                     out_log.write, Text(f"Error: {e}", style="#EF4444")

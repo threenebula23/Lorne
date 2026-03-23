@@ -1139,6 +1139,7 @@ def display_enhanced_status(
     version_count: int = 0,
     session_start: Optional[float] = None,
     creator_active: bool = False,
+    research_active: bool = False,
 ) -> None:
     """Enhanced status panel with RAG, versioning, and creator mode info."""
     bridge = _get_tui_bridge()
@@ -1150,6 +1151,8 @@ def display_enhanced_status(
             bridge.on_info(f"RAG: {rag_stats['chunks']:,} чанков, {rag_stats['files']} файлов")
         if creator_active:
             bridge.on_info("Creator Mode: активен")
+        if research_active:
+            bridge.on_info("Research Mode: активен")
         bridge.on_status_update(model=model_name, tokens=f"{total} msgs")
         return
 
@@ -1162,6 +1165,8 @@ def display_enhanced_status(
             print(f"  Версии файлов: {version_count}")
         if creator_active:
             print(f"  Creator Mode: активен")
+        if research_active:
+            print(f"  Research Mode: активен")
         return
 
     pct = 0
@@ -1199,6 +1204,8 @@ def display_enhanced_status(
 
     if creator_active:
         content += "\n  [dim]Creator Mode:[/dim] [bold green]активен[/bold green]"
+    if research_active:
+        content += "\n  [dim]Research Mode:[/dim] [bold cyan]активен[/bold cyan]"
 
     if session_start:
         import time

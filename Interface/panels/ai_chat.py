@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from rich.markup import escape
+from rich.markdown import Markdown
 from rich.text import Text
 
 from textual import on
@@ -70,6 +72,8 @@ class AIChatPanel(Vertical):
         self._selected_worker: Optional[str] = None
         self._worker_logs: Dict[str, List[str]] = {}
         self._context_hints: List[str] = []
+        self._last_render_key = ""
+        self._last_render_ts = 0.0
 
     def compose(self) -> ComposeResult:
         with TabbedContent("💬 Chat", "🤖 Agents", "⚙️ Settings"):
@@ -193,18 +197,23 @@ class AIChatPanel(Vertical):
         header = Text()
         header.append("🤖 AI: ", style=f"bold {GREEN}")
         log.write(header)
-        for line in text[:4000].split("\n"):
-            if line.startswith("```"):
-                log.write(Text(line, style=CYAN))
-            elif line.startswith("#"):
-                log.write(Text(line, style=f"bold {PURPLE_LIGHT}"))
-            elif line.startswith("- ") or line.startswith("* "):
-                log.write(Text(f"  {line}", style="#E5E7EB"))
-            else:
-                log.write(Text(line, style="#E5E7EB"))
+        try:
+            log.write(Markdown(text[:12000], code_theme="monokai"))
+        except Exception:
+            for line in text[:4000].split("\n"):
+                if line.startswith("```"):
+                    log.write(Text(line, style=CYAN))
+                elif line.startswith("#"):
+                    log.write(Text(line, style=f"bold {PURPLE_LIGHT}"))
+                elif line.startswith("- ") or line.startswith("* "):
+                    log.write(Text(f"  {line}", style="#E5E7EB"))
+                else:
+                    log.write(Text(line, style="#E5E7EB"))
         log.write(Text(""))
 
     def add_tool_message(self, tool_name: str, summary: str = "") -> None:
+        if self._is_duplicate_render(f"tool:{tool_name}:{summary[:80]}"):
+            return
         log = self.query_one("#chat-messages", RichLog)
         msg = Text()
         msg.append(f"  ⚡ {tool_name}", style=f"bold {PURPLE}")
@@ -213,6 +222,8 @@ class AIChatPanel(Vertical):
         log.write(msg)
 
     def add_tool_result(self, tool_name: str, summary: str = "") -> None:
+        if self._is_duplicate_render(f"tool_result:{tool_name}:{summary[:80]}"):
+            return
         log = self.query_one("#chat-messages", RichLog)
         msg = Text()
         msg.append(f"  ← {tool_name}", style=f"{DIM}")
@@ -221,15 +232,21 @@ class AIChatPanel(Vertical):
         log.write(msg)
 
     def add_thought(self, text: str) -> None:
+        if self._is_duplicate_render(f"thought:{(text or '')[:120]}"):
+            return
         log = self.query_one("#chat-messages", RichLog)
         for line in (text or "")[:2000].split("\n")[:40]:
             log.write(Text(f"  💭 {line}", style=f"italic {DIM}"))
 
     def add_error(self, text: str) -> None:
+        if self._is_duplicate_render(f"error:{text[:120]}"):
+            return
         log = self.query_one("#chat-messages", RichLog)
         log.write(Text(f"  ✗ {text}", style=f"bold {RED}"))
 
     def add_info(self, text: str) -> None:
+        if self._is_duplicate_render(f"info:{text[:120]}"):
+            return
         log = self.query_one("#chat-messages", RichLog)
         log.write(Text(f"  {text}", style=GRAY))
 
@@ -461,6 +478,14 @@ class AIChatPanel(Vertical):
         self._current_mode = mode
         self.post_message(ModeToggled(mode))
         self.notify(f"Mode: {mode}")
+
+    def _is_duplicate_render(self, key: str, window_sec: float = 1.2) -> bool:
+        now = time.time()
+        if key == self._last_render_key and (now - self._last_render_ts) < window_sec:
+            return True
+        self._last_render_key = key
+        self._last_render_ts = now
+        return False
 
     @on(Select.Changed, "#model-select")
     def on_model_change(self, event: Select.Changed) -> None:

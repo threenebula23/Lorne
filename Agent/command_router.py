@@ -205,6 +205,7 @@ class CommandRouter:
             pass
 
         creator_active = self.ctx.get("creator_mode_active", [False])[0]
+        research_active = self.ctx.get("research_mode_active", [False])[0]
 
         display_enhanced_status(
             self.ctx["model_name"], self.ctx["model_profile"],
@@ -212,6 +213,7 @@ class CommandRouter:
             human_count, ai_count, tool_count, len(messages),
             rag_stats=rag_stats,
             creator_active=creator_active,
+            research_active=research_active,
         )
         return True
 
@@ -362,6 +364,8 @@ class CommandRouter:
             print_info("Под-агенты:")
             for a in list_agents():
                 print_info(f"  - {a.get('id')}: {a.get('title')}")
+            if self.ctx.get("research_mode_active", [False])[0]:
+                print_info("  - research: Режим исследования (web/doc tools)")
             return True
         if parts[1] == "use" and len(parts) >= 3:
             aid = set_current_agent(parts[2])
@@ -457,11 +461,31 @@ class CommandRouter:
         return True
 
     def _handle_research(self, user_input: str) -> bool:
-        """Deep research mode — uses web tools + orchestrator for thorough analysis."""
+        """Research command: /research on|off|status|<query>."""
         parts = user_input.split(maxsplit=1)
         query = parts[1].strip() if len(parts) > 1 else ""
+        q_low = query.lower()
+        research_flag = self.ctx.get("research_mode_active")
+
+        if q_low in ("on", "enable"):
+            if isinstance(research_flag, list):
+                research_flag[0] = True
+            print_success("Research mode: ON")
+            return True
+
+        if q_low in ("off", "disable"):
+            if isinstance(research_flag, list):
+                research_flag[0] = False
+            print_info("Research mode: OFF")
+            return True
+
+        if q_low in ("status",):
+            active = bool(research_flag[0]) if isinstance(research_flag, list) else False
+            print_info(f"Research mode: {'ON' if active else 'OFF'}")
+            return True
+
         if not query:
-            print_warning("Usage: /research <topic or question>")
+            print_warning("Usage: /research on|off|status|<topic or question>")
             return True
 
         print_info(f"🔍 Research mode: {query[:80]}")

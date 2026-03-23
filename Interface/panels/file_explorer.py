@@ -11,7 +11,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.widgets import (
-    Button, DirectoryTree, Input, Label, ListItem, ListView,
+    Button, Checkbox, DirectoryTree, Input, Label, ListItem, ListView,
     Select, Static, TabbedContent, TabPane, TextArea,
 )
 from textual.message import Message
@@ -122,7 +122,7 @@ class FileExplorerPanel(Vertical):
                     yield Button("▶ Run", id="btn-run", variant="warning")
                     yield Button("📎 Ctx", id="btn-ctx", variant="success")
             with TabPane("Git", id="tab-git"):
-                yield Vertical(id="git-staging")
+                yield VerticalScroll(id="git-staging")
             with TabPane("Settings", id="tab-settings"):
                 yield VerticalScroll(id="settings-panel")
 
@@ -138,22 +138,46 @@ class FileExplorerPanel(Vertical):
             pass
 
     def _populate_git_staging(self) -> None:
-        container = self.query_one("#git-staging", Vertical)
+        container = self.query_one("#git-staging", VerticalScroll)
+        container.remove_children()
+        self._staged_files.clear()
         try:
             from Agent.git_integration import get_git_manager
             gm = get_git_manager()
             if gm.available:
                 status = gm.status_summary()
-                files = (
+                files_raw = (
                     status.get("changed", [])
                     + status.get("staged", [])
                     + status.get("untracked", [])
                 )
+                files = []
+                seen = set()
+                for f in files_raw:
+                    if f not in seen:
+                        seen.add(f)
+                        files.append(f)
                 if files:
-                    lv = ListView(id="staged-list")
-                    container.mount(lv)
-                    for f in files[:30]:
-                        lv.append(ListItem(Label(f"  {f}")))
+                    container.mount(Static("── Git Staging ──", classes="staging-header"))
+                    for i, f in enumerate(files):
+                        cat = "M"
+                        if f in status.get("untracked", []):
+                            cat = "?"
+                        elif f in status.get("staged", []):
+                            cat = "S"
+                        is_selected = cat == "S"
+                        if is_selected:
+                            self._staged_files.append(f)
+                        marker = "✓" if is_selected else "○"
+                        cb = Checkbox(
+                            f"{marker} [{cat}] {f}",
+                            value=is_selected,
+                            id=f"fe-stage-file-{i}",
+                            classes="git-stage-checkbox",
+                        )
+                        cb._file_path = f
+                        cb._cat = cat
+                        container.mount(cb)
                 else:
                     container.mount(Label("  No changes", classes="dim"))
                 container.mount(Input(placeholder="Commit message…", id="commit-input"))
@@ -162,6 +186,31 @@ class FileExplorerPanel(Vertical):
                 container.mount(Label("  Git not available"))
         except Exception:
             container.mount(Label("  Git not available"))
+
+    @on(Checkbox.Changed, ".git-stage-checkbox")
+    def on_git_stage_toggle(self, event: Checkbox.Changed) -> None:
+        cb = event.checkbox
+        file_path = getattr(cb, "_file_path", None)
+        cat = getattr(cb, "_cat", "M")
+        if not file_path:
+            return
+        try:
+            from Agent.git_integration import get_git_manager
+            gm = get_git_manager()
+            if gm.available and gm.repo:
+                if event.value:
+                    gm.repo.index.add([file_path])
+                else:
+                    gm.repo.git.reset("HEAD", "--", file_path)
+        except Exception:
+            pass
+        if event.value:
+            if file_path not in self._staged_files:
+                self._staged_files.append(file_path)
+            cb.label = f"✓ [{cat}] {file_path}"
+        else:
+            self._staged_files = [f for f in self._staged_files if f != file_path]
+            cb.label = f"○ [{cat}] {file_path}"
 
     def _populate_settings(self) -> None:
         from Interface.ui_prefs import load_prefs
@@ -194,15 +243,26 @@ class FileExplorerPanel(Vertical):
 
         container.mount(Label("── 🎨 Syntax Highlighting ── (global)"))
         syn = prefs.get("syntax_theme", "monokai")
-        syn_opts = ("monokai", "dracula", "github_dark", "css", "nord")
+        syn_alias_to_actual = {
+            "monokai": "monokai",
+            "dracula": "dracula",
+            "github_dark": "github_light",
+            "github_light": "github_light",
+            "css": "css",
+            "vs_dark": "vscode_dark",
+            "vscode_dark": "vscode_dark",
+            "nord": "vscode_dark",
+        }
+        syn_opts = tuple(syn_alias_to_actual.keys())
         if syn not in syn_opts:
             syn = "monokai"
+        syn_actual = syn_alias_to_actual.get(syn, "monokai")
         container.mount(Select(
             [
                 ("Monokai", "monokai"),
                 ("Dracula", "dracula"),
                 ("GitHub Dark", "github_dark"),
-                ("VS Dark", "css"),
+                ("VS Dark", "vs_dark"),
                 ("Nord", "nord"),
             ],
             value=syn, id="fe-syntax-select", allow_blank=False,
@@ -214,7 +274,7 @@ class FileExplorerPanel(Vertical):
                 self.app.remove_class(f"density-{d}")
             self.app.add_class(f"density-{dens}")
             for ta in self.app.query(TextArea):
-                ta.theme = syn
+                ta.theme = syn_actual
         except Exception:
             pass
 
@@ -303,7 +363,6 @@ class FileExplorerPanel(Vertical):
             from Interface.ui_prefs import save_prefs
             apply_theme(self.app, theme_name)
             save_prefs(theme=theme_name)
-            self.notify(f"Theme: {theme_name}")
         except Exception as e:
             self.notify(f"Theme error: {e}", severity="error")
 
@@ -320,19 +379,27 @@ class FileExplorerPanel(Vertical):
             save_prefs(density=density)
         except Exception:
             pass
-        self.notify(f"Density: {density}")
 
     @on(Select.Changed, "#fe-syntax-select")
     def on_syntax_theme_change(self, event: Select.Changed) -> None:
         if not event.value or event.value == Select.BLANK:
             return
         theme = str(event.value)
+        theme_actual = {
+            "monokai": "monokai",
+            "dracula": "dracula",
+            "github_dark": "github_light",
+            "github_light": "github_light",
+            "css": "css",
+            "vs_dark": "vscode_dark",
+            "vscode_dark": "vscode_dark",
+            "nord": "vscode_dark",
+        }.get(theme, "monokai")
         try:
             for ta in self.app.query(TextArea):
-                ta.theme = theme
+                ta.theme = theme_actual
             from Interface.ui_prefs import save_prefs
             save_prefs(syntax_theme=theme)
-            self.notify(f"Syntax: {theme}")
         except Exception:
             pass
 
