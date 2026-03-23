@@ -32,7 +32,7 @@
 **macOS / Linux:**
 
 ```bash
-git clone https://github.com/your-repo/TCA.git
+git clone https://github.com/threenebula23/TCA.git
 cd TCA
 chmod +x install.sh
 ./install.sh
@@ -41,7 +41,7 @@ chmod +x install.sh
 **Windows:**
 
 ```cmd
-git clone https://github.com/your-repo/TCA.git
+git clone https://github.com/threenebula23/TCA.git
 cd TCA
 install.bat
 ```
