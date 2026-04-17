@@ -230,7 +230,7 @@ def _run_single_worker(
         from Interface.tui_bridge import get_bridge
         bridge = get_bridge()
         if bridge:
-            bridge.on_creator_worker_update(worker_id, action=f"Starting: {task[:60]}")
+            bridge.on_creator_worker_update(worker_id, action=f"Старт: {task}")
     except Exception:
         bridge = None
 
@@ -301,19 +301,15 @@ def _run_single_worker(
                                 )
                             if bridge:
                                 bridge.on_creator_worker_update(
-                                    worker_id, tool_name=t_names,
-                                    action=action_text[:100],
-                                    thinking=msg_content[:200] if msg_content else "",
+                                    worker_id,
+                                    tool_name=t_names,
+                                    action=action_text,
+                                    thinking="",
                                 )
                     elif msg_content and msg is messages[-1]:
                         final_content = msg_content
                         if display:
                             display.update_worker(worker_id, current_action="Finalizing")
-                        if bridge:
-                            bridge.on_creator_worker_update(
-                                worker_id, action="Finalizing",
-                                thinking=msg_content[:200],
-                            )
 
             round_num = current_round_num
             tool_count = current_tool_count
@@ -429,6 +425,14 @@ def _run_single_worker(
         if bridge:
             tree_data = _build_tree_data(result_data)
             bridge.on_creator_tree(tree_data)
+            fc = (final_content or "").strip()
+            if fc:
+                bridge.on_creator_worker_update(
+                    worker_id,
+                    tool_name="",
+                    action="### Итог воркера" if final_status == "done" else "### Результат воркера",
+                    thinking=fc,
+                )
     except Exception:
         pass
 

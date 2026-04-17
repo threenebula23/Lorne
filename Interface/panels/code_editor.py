@@ -256,6 +256,111 @@ class RunFileRequested(Message):
         self.path = path
 
 
+class CloseWorkspaceTab(Message):
+    def __init__(self, tab_id: str) -> None:
+        super().__init__()
+        self.tab_id = tab_id
+
+
+class FileEditorTabPane(Vertical):
+    """Single-file editor used inside a workspace tab."""
+
+    BINDINGS = [
+        Binding("ctrl+s", "save_file", "Save", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    FileEditorTabPane {
+        height: 1fr;
+    }
+    #file-tab-toolbar {
+        dock: top;
+        height: auto;
+        min-height: 3;
+        layout: horizontal;
+        background: #151520;
+        padding: 0 0 1 0;
+    }
+    #file-tab-toolbar Button {
+        min-width: 12;
+        height: 3;
+        margin: 0 1 0 0;
+    }
+    """
+
+    def __init__(self, path: Path, close_tab_id: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._path = path.resolve()
+        self._close_tab_id = close_tab_id
+        safe = close_tab_id.replace("-", "_")
+        self._editor_id = f"fte-{safe}"
+        suf = self._path.suffix.lower()
+        if suf == ".ipynb":
+            try:
+                nb_data = _read_notebook_json(self._path)
+                self._initial_text = json.dumps(nb_data, indent=2, ensure_ascii=False)
+                self._lang = "json"
+            except Exception as e:
+                self._initial_text = f"# Не удалось открыть ipynb как JSON: {e}"
+                self._lang = "markdown"
+        else:
+            try:
+                self._initial_text = self._path.read_text(encoding="utf-8", errors="replace")
+            except Exception as e:
+                self._initial_text = f"# Cannot read: {e}"
+                self._lang = "markdown"
+            else:
+                self._lang = _LANG_MAP.get(suf, "python")
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="file-tab-toolbar"):
+            yield Button("Сохранить", id="file-tab-save", variant="default")
+            yield Button("Запустить", id="file-tab-run", variant="success")
+            yield Button("Закрыть вкладку", id="file-tab-close", variant="error")
+        editor = TCACodeEditor.code_editor(
+            self._initial_text, language=self._lang, id=self._editor_id,
+        )
+        editor.show_line_numbers = True
+        yield editor
+
+    def on_mount(self) -> None:
+        try:
+            from Interface.ui_prefs import load_prefs
+            from Interface.themes import SYNTAX_THEME_MAP, ensure_custom_textarea_themes
+            ed = self.query_one(f"#{self._editor_id}", TCACodeEditor)
+            ensure_custom_textarea_themes(ed)
+            ed.theme = SYNTAX_THEME_MAP.get(
+                str(load_prefs().get("syntax_theme", "monokai")), "monokai",
+            )
+        except Exception:
+            pass
+
+    @on(Button.Pressed, "#file-tab-save")
+    def _on_save(self) -> None:
+        self._save_to_disk()
+
+    @on(Button.Pressed, "#file-tab-run")
+    def _on_run(self) -> None:
+        self.post_message(RunFileRequested(self._path))
+
+    @on(Button.Pressed, "#file-tab-close")
+    def _on_close(self) -> None:
+        self.post_message(CloseWorkspaceTab(self._close_tab_id))
+
+    def action_save_file(self) -> None:
+        self._save_to_disk()
+
+    def _save_to_disk(self) -> None:
+        try:
+            ed = self.query_one(f"#{self._editor_id}", TCACodeEditor)
+            text = ed.text
+            self._path.write_text(text, encoding="utf-8")
+            self.notify(f"Saved: {self._path.name}")
+            self.post_message(FileSaved(self._path, text))
+        except Exception as e:
+            self.notify(f"Save error: {e}", severity="error")
+
+
 class CodeEditorPanel(Vertical):
     """Center upper panel — tabbed code editor with autocomplete and find/replace."""
 

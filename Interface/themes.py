@@ -398,14 +398,12 @@ def _apply_recursive(container, t: ThemeColors) -> None:
             _set(widget, background=t["bg3"], color=t["fg"])
         elif wid == "top-model-label":
             _set(widget, color=t["accent2"])
-        elif wid in ("col-left", "col-center"):
+        elif wid in ("col-left",):
             _set(widget, border_right=("solid", t["border"]), background=t["bg"])
-        elif wid == "ai-chat":
-            _set(widget, border_left=("solid", t["border"]), background=t["bg"])
-        elif wid in ("file-explorer", "code-editor", "version-control", "terminal-panel"):
+        elif wid == "workspace-center":
+            _set(widget, background=t["bg"])
+        elif wid in ("file-explorer", "active-agents"):
             _set(widget, border_bottom=("solid", t["border"]), background=t["bg"])
-        elif wid in ("resize-left", "resize-right"):
-            _set(widget, background=t["border"])
 
         if isinstance(widget, (Vertical, Horizontal, VerticalScroll)) or (
             _ScrollableContainer is not None and isinstance(widget, _ScrollableContainer)

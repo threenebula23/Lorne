@@ -6,11 +6,17 @@ from langchain_core.tools import BaseTool
 try:
     from .tools import (
         read_file, list_files, edit_file, search_in_files, write_file,
+        replace_file_lines, insert_file_lines,
         get_file_line_count, run_command, create_pdf, ask_user,
         create_code_file, append_code_snippet,
         save_plan, load_plan, update_plan, clear_plan,
         list_file_versions, rollback_file,
-        web_search, web_fetch, get_documentation, code_interpreter,
+        web_search, web_fetch,
+        ocr_read_file_soft, ocr_read_image_medium, ocr_read_photo_strong,
+        office_document_read,
+        docx_document_create, docx_document_append_paragraphs, docx_document_patch_paragraphs,
+        pdf_styled_document_create,
+        get_documentation, code_interpreter,
         load_custom_tools, list_custom_tools, add_custom_tool,
         remove_custom_tool, get_custom_tools_prompt, reload_custom_tools,
     )
@@ -19,11 +25,17 @@ try:
 except ImportError:
     from Agent.tools import (
         read_file, list_files, edit_file, search_in_files, write_file,
+        replace_file_lines, insert_file_lines,
         get_file_line_count, run_command, create_pdf, ask_user,
         create_code_file, append_code_snippet,
         save_plan, load_plan, update_plan, clear_plan,
         list_file_versions, rollback_file,
-        web_search, web_fetch, get_documentation, code_interpreter,
+        web_search, web_fetch,
+        ocr_read_file_soft, ocr_read_image_medium, ocr_read_photo_strong,
+        office_document_read,
+        docx_document_create, docx_document_append_paragraphs, docx_document_patch_paragraphs,
+        pdf_styled_document_create,
+        get_documentation, code_interpreter,
         load_custom_tools, list_custom_tools, add_custom_tool,
         remove_custom_tool, get_custom_tools_prompt, reload_custom_tools,
     )
@@ -58,12 +70,19 @@ __all__ = [
 ]
 
 _base_tools: List[Any] = [
-    read_file, list_files, edit_file, write_file, get_file_line_count,
+    read_file, list_files, edit_file, write_file,
+    replace_file_lines, insert_file_lines,
+    get_file_line_count,
     create_code_file, append_code_snippet,
     save_plan, load_plan, update_plan, clear_plan,
     list_file_versions, rollback_file,
     search_in_files, run_command, create_pdf, ask_user,
-    web_search, web_fetch, web_search_and_read, get_documentation, code_interpreter,
+    web_search, web_fetch, web_search_and_read,
+    ocr_read_file_soft, ocr_read_image_medium, ocr_read_photo_strong,
+    office_document_read,
+    docx_document_create, docx_document_append_paragraphs, docx_document_patch_paragraphs,
+    pdf_styled_document_create,
+    get_documentation, code_interpreter,
     get_rag_tool(),
 ]
 

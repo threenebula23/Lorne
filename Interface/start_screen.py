@@ -1,7 +1,6 @@
 """Initial TUI screen for selecting a project before launching the main app."""
 from __future__ import annotations
 
-import subprocess
 from collections import deque
 from math import cos, sin
 from pathlib import Path
@@ -306,46 +305,6 @@ class ProjectPickerScreen(ModalScreen[Optional[Path]]):
             self._go_to(Path(value).expanduser())
 
 
-class GitCloneScreen(ModalScreen[Optional[str]]):
-    DEFAULT_CSS = """
-    GitCloneScreen { align: center middle; }
-    #clone-box {
-        width: 80;
-        height: auto;
-        background: #151520;
-        border: round #8B5CF6;
-        padding: 1 2;
-    }
-    #clone-input { margin: 1 0; }
-    #clone-actions { height: 3; layout: horizontal; }
-    #clone-actions Button { min-width: 16; margin: 0 1 0 0; }
-    """
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="clone-box"):
-            yield Label("Вставьте ссылку на GitHub репозиторий")
-            yield Input(placeholder="https://github.com/user/repo.git", id="clone-input")
-            with Horizontal(id="clone-actions"):
-                yield Button("Клонировать", id="clone-ok")
-                yield Button("Отмена", id="clone-cancel")
-
-    def on_mount(self) -> None:
-        self.query_one("#clone-input", Input).focus()
-
-    @on(Button.Pressed, "#clone-ok")
-    def on_ok(self) -> None:
-        value = self.query_one("#clone-input", Input).value.strip()
-        self.dismiss(value or None)
-
-    @on(Button.Pressed, "#clone-cancel")
-    def on_cancel(self) -> None:
-        self.dismiss(None)
-
-    @on(Input.Submitted, "#clone-input")
-    def on_submit(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value.strip() or None)
-
-
 class StartScreenApp(App[Optional[Path]]):
     CSS = """
     Screen { layout: horizontal; }
@@ -400,7 +359,6 @@ class StartScreenApp(App[Optional[Path]]):
                 with Vertical(id="buttons"):
                     yield Button("Открыть проект", id="btn-open-project")
                     yield Button("Открыть с текущей директории", id="btn-open-current")
-                    yield Button("Склонировать git", id="btn-clone-git")
                 yield Label("Последние проекты", id="recent-title")
                 yield VerticalScroll(id="recent-list")
 
@@ -484,48 +442,12 @@ class StartScreenApp(App[Optional[Path]]):
         if picked:
             self._finish(picked)
 
-    @on(Button.Pressed, "#btn-clone-git")
-    def clone_git(self) -> None:
-        self.push_screen(GitCloneScreen(), self._on_git_url)
-
-    def _on_git_url(self, url: Optional[str]) -> None:
-        if not url:
-            return
-        try:
-            proc = subprocess.run(
-                ["git", "clone", url],
-                cwd=str(self._cwd),
-                capture_output=True,
-                text=True,
-            )
-            if proc.returncode != 0:
-                self.notify(proc.stderr.strip() or "Ошибка клонирования", severity="error")
-                return
-            folder = _guess_repo_folder(url, self._cwd)
-            if folder and folder.is_dir():
-                self._finish(folder)
-                return
-            # fallback: open cwd if repo name detection failed
-            self._finish(self._cwd)
-        except Exception as e:
-            self.notify(str(e), severity="error")
-
     @on(Button.Pressed, ".recent-btn")
     def on_recent_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""
         target = self._recent_map.get(btn_id)
         if target:
             self._finish(target)
-
-
-def _guess_repo_folder(url: str, base_dir: Path) -> Optional[Path]:
-    cleaned = url.strip().rstrip("/")
-    name = cleaned.split("/")[-1]
-    if name.endswith(".git"):
-        name = name[:-4]
-    if not name:
-        return None
-    return (base_dir / name).resolve()
 
 
 def select_project_path(cwd: Path) -> Optional[Path]:

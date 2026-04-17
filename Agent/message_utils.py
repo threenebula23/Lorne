@@ -195,8 +195,25 @@ TOOL_RESULT_LIMITS: Dict[str, int] = {
     "run_command": 3000,
     "list_files": 2000,
     "rag_search": 3000,
+    "web_search": 9000,
+    "web_fetch": 14_000,
+    "web_search_and_read": 14_000,
+    "ocr_read_file_soft": 7000,
+    "ocr_read_image_medium": 7000,
+    "ocr_read_photo_strong": 9000,
+    "office_document_read": 10_000,
+    "docx_document_create": 4000,
+    "docx_document_append_paragraphs": 4000,
+    "docx_document_patch_paragraphs": 4000,
+    "pdf_styled_document_create": 4000,
 }
 DEFAULT_RESULT_LIMIT = 3000
+
+_WEB_COMPACT_TOOLS = frozenset({"web_search", "web_fetch", "web_search_and_read"})
+_OCR_COMPACT_TOOLS = frozenset({
+    "ocr_read_file_soft", "ocr_read_image_medium", "ocr_read_photo_strong",
+})
+_OFFICE_COMPACT_TOOLS = frozenset({"office_document_read"})
 
 
 def truncate_result(tool_name: str, content_str: str) -> str:
@@ -221,6 +238,40 @@ def annotate_errors(tool_name: str, result: Any) -> str:
 
     if not isinstance(result, dict):
         return truncate_result(tool_name, content_str)
+
+    def _tool_failed(d: dict) -> bool:
+        if d.get("error"):
+            return True
+        try:
+            rc = d.get("returncode")
+            if rc is not None and int(rc) != 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+        if d.get("skipped"):
+            return True
+        return False
+
+    if (
+        tool_name in _WEB_COMPACT_TOOLS
+        and not _tool_failed(result)
+        and result.get("_model_compact")
+    ):
+        return truncate_result(tool_name, str(result["_model_compact"]))
+
+    if (
+        tool_name in _OCR_COMPACT_TOOLS
+        and not _tool_failed(result)
+        and result.get("_model_compact")
+    ):
+        return truncate_result(tool_name, str(result["_model_compact"]))
+
+    if (
+        tool_name in _OFFICE_COMPACT_TOOLS
+        and not _tool_failed(result)
+        and result.get("_model_compact")
+    ):
+        return truncate_result(tool_name, str(result["_model_compact"]))
 
     has_error = False
     error_detail = ""

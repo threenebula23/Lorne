@@ -9,6 +9,7 @@ try:
     from Interface.visualization import (
         display_shell_command, display_tool_result, display_model_selector,
         display_status_panel, display_rag_results, display_enhanced_status,
+        display_model_reply,
         suggest_command,
         print_info, print_success, print_warning, print_error, print_commands,
         get_user_input, console, HAS_RICH,
@@ -20,6 +21,9 @@ except ImportError:
     def display_status_panel(*a): pass
     def display_rag_results(r, q): pass
     def display_enhanced_status(*a, **kw): pass
+    def display_model_reply(sn, content, meta=None):
+        if content:
+            print((content or "").strip()[:8000])
     def suggest_command(s): return None
     def print_info(m): print(f"  {m}")
     def print_success(m): print(f"  ✓ {m}")
@@ -37,6 +41,7 @@ from .tool_registry import (
     list_custom_tools, add_custom_tool, remove_custom_tool,
     reload_tools, get_custom_tools_prompt,
 )
+from .creator_summary import format_creator_summary_text
 
 
 def _should_autoplan(text: str) -> bool:
@@ -699,16 +704,19 @@ class CommandRouter:
             tools=self.ctx["tools"],
             project_context=self.ctx["project_structure"],
         )
-        self.ctx["print_creator_details"](creator_result)
+        summary_text = format_creator_summary_text(creator_result)
+        try:
+            display_model_reply(0, summary_text, None)
+        except Exception:
+            pass
+        try:
+            self.ctx["print_creator_details"](creator_result, worker_panels=False)
+        except TypeError:
+            self.ctx["print_creator_details"](creator_result)
+        except Exception:
+            pass
 
         messages = self.ctx["messages"]
-        summary_parts = [f"Creator Mode выполнил задачу: {task}"]
-        for r in creator_result.get("results", []):
-            status_icon = "✓" if r["status"] == "done" else "✗"
-            summary_parts.append(f"  {status_icon} {r['worker_id']}: {r['task'][:60]}")
-            if r.get("result"):
-                summary_parts.append(f"    Результат: {r['result']}")
-        summary_text = "\n".join(summary_parts)
         messages.append(HumanMessage(content=f"[Creator Mode результат]\n{summary_text}"))
         messages.append(AIMessage(content=summary_text))
         try:

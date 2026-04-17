@@ -4,10 +4,11 @@ TCA — Terminal Coding Assistant.
 Entry point: can be run directly or via `tca` command after installation.
 
 Usage:
-    tca                            — run in current directory
-    tca /path/to/project           — run in specific directory
-    tca env=<OPENROUTER_API_KEY>   — run with API key
-    tca /path env=<KEY>            — combine both
+    tca                            — TUI IDE (default), current directory
+    tca /path/to/project           — open project directory
+    tca env=<OPENROUTER_API_KEY>   — save key to Agent/.env and run
+    tca --classic                  — classic CLI (Rich, line input)
+    tca --tui                      — force TUI (same as default)
 """
 import os
 import sys
@@ -63,10 +64,12 @@ def main():
 
     mode = os.getenv("TCA_MODE", "tui").lower()
 
-    # Check --classic flag
     if "--classic" in sys.argv:
         sys.argv.remove("--classic")
         mode = "classic"
+    if "--tui" in sys.argv:
+        sys.argv.remove("--tui")
+        mode = "tui"
 
     if mode == "classic":
         from Agent.agent import run_coding_agent_loop

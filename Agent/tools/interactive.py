@@ -11,7 +11,7 @@ def ask_user(question: str) -> Dict[str, Any]:
     bridge = get_bridge()
 
     if bridge:
-        reply = bridge.request_input(question)
+        reply = bridge.request_user_choice(question)
         return {"question": question, "reply": reply, "ok": bool(reply)}
 
     import sys

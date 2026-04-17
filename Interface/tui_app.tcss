@@ -65,19 +65,11 @@ Header {
     border-right: solid #2D2D3D;
 }
 
-#col-center {
+#workspace-center {
     width: 1fr;
-    min-width: 30;
-    layout: vertical;
-}
-
-#ai-chat {
-    width: 38;
-    min-width: 22;
-    max-width: 60;
-    layout: vertical;
-    border-left: solid #2D2D3D;
+    min-width: 36;
     height: 1fr;
+    layout: vertical;
 }
 
 /* ─── Panel Containers ──────────────────────────── */
@@ -87,30 +79,9 @@ Header {
     border-bottom: solid #2D2D3D;
 }
 
-#version-control {
+#active-agents {
     height: 1fr;
     min-height: 6;
-}
-
-#code-editor, #image-viewer {
-    height: 2fr;
-    border-bottom: solid #2D2D3D;
-}
-
-#image-viewer {
-    display: none;
-}
-
-#terminal-panel {
-    height: 1fr;
-    min-height: 6;
-}
-
-#terminal-panel.maximized {
-    height: 1fr;
-    min-height: 100%;
-    dock: top;
-    layer: terminal;
 }
 
 /* ─── TabbedContent Styling ─────────────────────── */
@@ -692,7 +663,7 @@ FilteredDirectoryTree > .tree--highlight {
 
 /* ─── AI Chat ───────────────────────────────────── */
 
-#chat-messages {
+#main-chat-stream, #chat-messages-worker {
     height: 1fr;
     background: #0D0D0D;
     padding: 0 1;
@@ -703,33 +674,76 @@ FilteredDirectoryTree > .tree--highlight {
 #chat-input-area {
     dock: bottom;
     height: auto;
-    max-height: 12;
-    background: #1a1a2e;
+    max-height: 40;
+    background: #0D0D0D;
     padding: 1;
 }
 
 #chat-input {
-    height: 3;
-    background: #151520;
+    min-height: 3;
+    max-height: 12;
+    height: auto;
+    background: #0D0D0D;
     color: #E5E7EB;
     border: solid #2D2D3D;
     margin: 0 0 1 0;
 }
 
+#ctx-meter-row {
+    height: auto;
+    min-height: 2;
+    layout: horizontal;
+    align: left middle;
+    margin: 0 0 1 0;
+}
+
+#ctx-progress-visual {
+    width: 1fr;
+    min-width: 18;
+    height: auto;
+    min-height: 1;
+    color: #9CA3AF;
+}
+
+#ctx-session-line {
+    width: auto;
+    min-width: 8;
+    height: auto;
+    color: #6B7280;
+    text-align: right;
+    content-align: right middle;
+}
+
+.attach-chip {
+    height: auto;
+    min-height: 3;
+    text-align: left;
+    content-align: left middle;
+}
+
 #chat-controls {
     layout: horizontal;
-    height: 3;
+    height: auto;
+    min-height: 3;
     align: left middle;
 }
 
+#chat-controls Select {
+    height: auto;
+    min-height: 3;
+    color: #E5E7EB;
+    background: #0D0D0D;
+}
+
 #model-select {
-    width: 1fr;
-    max-width: 20;
+    width: 2fr;
+    min-width: 26;
+    max-width: 100%;
     height: 3;
 }
 
 #model-select SelectCurrent {
-    background: #151520;
+    background: #0D0D0D;
     color: #A78BFA;
     border: solid #2D2D3D;
     height: 3;
@@ -746,25 +760,18 @@ FilteredDirectoryTree > .tree--highlight {
 }
 
 #mode-select {
-    width: 9;
-    max-width: 12;
+    width: 1fr;
+    min-width: 16;
+    max-width: 100%;
     height: 3;
     margin: 0 1;
 }
 
 #mode-select SelectCurrent {
-    background: #151520;
+    background: #0D0D0D;
     color: #A78BFA;
     border: solid #2D2D3D;
     height: 3;
-}
-
-#ctx-label {
-    width: 5;
-    height: 3;
-    color: #6B7280;
-    text-align: center;
-    content-align: center middle;
 }
 
 #stop-btn {
@@ -787,8 +794,19 @@ FilteredDirectoryTree > .tree--highlight {
     background: #DC2626;
 }
 
+#attach-file-btn {
+    min-width: 18;
+    height: 3;
+    background: #2D2D3D;
+    color: #E5E7EB;
+}
+
+#attach-file-btn:hover {
+    background: #3D3D4D;
+}
+
 #send-btn {
-    min-width: 8;
+    min-width: 12;
     height: 3;
     background: #8B5CF6;
     color: #ffffff;
@@ -826,40 +844,17 @@ FilteredDirectoryTree > .tree--highlight {
     text-style: bold;
 }
 
-/* ─── Agent Tree / Detail (Creator Mode) ─────────── */
+/* ─── Active agents tree ─────────────────────────── */
 
-#agents-header {
-    height: 1;
-    background: #1a1a2e;
-    color: #A78BFA;
-    text-style: bold;
-    padding: 0 1;
-}
-
-#agent-detail-header {
-    height: 1;
-    background: #1a1a2e;
-    color: #A78BFA;
-    text-style: bold;
-    padding: 0 1;
-}
-
-#creator-tree {
+#agents-tree {
     height: 1fr;
     background: #0D0D0D;
     scrollbar-color: #8B5CF6;
     scrollbar-background: #1a1a2e;
 }
 
-#creator-tree > .tree--cursor {
+#agents-tree > .tree--cursor {
     background: #8B5CF6 30%;
-}
-
-#agent-detail-log {
-    height: 1fr;
-    background: #0D0D0D;
-    padding: 0 1;
-    border-top: solid #2D2D3D;
 }
 
 /* ─── Scrollbars ────────────────────────────────── */
@@ -879,20 +874,55 @@ TextArea {
     scrollbar-background: #1a1a2e;
 }
 
-/* ─── Density Variants ─────────────────────────── */
+/* ─── Density / UI size (compact → spacious) ───── */
 
 .density-compact TabPane { padding: 0; }
-.density-compact #chat-input-area { padding: 0; }
-.density-compact .file-actions { height: 1; }
-.density-compact .file-actions Button { height: 1; min-width: 5; }
-.density-compact Tabs { height: 1; }
-.density-compact Tab { padding: 0; }
+.density-compact #chat-input-area { padding: 0; max-height: 32; }
+.density-compact #chat-input { min-height: 2; max-height: 8; margin: 0 0 0 0; }
+.density-compact #ctx-meter-row { min-height: 1; margin: 0 0 0 0; }
+.density-compact .file-actions { height: 1; min-height: 1; }
+.density-compact .file-actions Button { height: 1; min-height: 1; min-width: 5; }
+.density-compact Tabs { height: 1; min-height: 1; }
+.density-compact Tab { padding: 0; min-height: 1; }
+.density-compact #chat-controls { min-height: 1; }
+.density-compact #chat-controls Button { height: 1; min-height: 1; min-width: 8; }
+.density-compact #chat-controls Select { min-height: 1; height: auto; }
+.density-compact #model-select { height: 1; min-height: 1; }
+.density-compact #model-select SelectCurrent { height: 1; min-height: 1; }
+.density-compact #mode-select { height: 1; min-height: 1; margin: 0 1; }
+.density-compact #mode-select SelectCurrent { height: 1; min-height: 1; }
+.density-compact #send-btn { min-width: 10; height: 1; min-height: 1; }
+.density-compact #attach-file-btn { min-width: 12; height: 1; min-height: 1; }
+.density-compact #stop-btn { height: 1; min-height: 1; min-width: 6; }
+.density-compact .attach-chip { min-height: 2; min-width: 8; }
+.density-compact #main-chat-stream, .density-compact #chat-messages-worker { padding: 0; }
+.density-compact #agents-panel-title { height: 1; min-height: 1; padding: 0; }
+.density-compact #tree-root-label { height: 1; }
+
+.density-normal #chat-input { min-height: 3; max-height: 12; }
 
 .density-spacious TabPane { padding: 1; }
-.density-spacious #chat-input-area { padding: 1 2; }
-.density-spacious .file-actions { height: 5; }
-.density-spacious .file-actions Button { height: 5; min-width: 10; }
-.density-spacious Tabs { height: 5; }
+.density-spacious #chat-input-area { padding: 1 2; max-height: 48; }
+.density-spacious #chat-input { min-height: 5; max-height: 18; margin: 0 0 1 0; }
+.density-spacious #ctx-meter-row { min-height: 3; margin: 0 0 1 0; }
+.density-spacious .file-actions { height: 5; min-height: 5; }
+.density-spacious .file-actions Button { height: 5; min-height: 5; min-width: 10; }
+.density-spacious Tabs { height: 5; min-height: 5; }
+.density-spacious Tab { padding: 0 2; min-height: 5; }
+.density-spacious #chat-controls { min-height: 5; }
+.density-spacious #chat-controls Button { height: 5; min-height: 5; min-width: 14; }
+.density-spacious #chat-controls Select { min-height: 5; height: auto; }
+.density-spacious #model-select { height: 5; min-height: 5; }
+.density-spacious #model-select SelectCurrent { height: 5; min-height: 5; }
+.density-spacious #mode-select { height: 5; min-height: 5; margin: 0 1; }
+.density-spacious #mode-select SelectCurrent { height: 5; min-height: 5; }
+.density-spacious #send-btn { min-width: 14; height: 5; min-height: 5; }
+.density-spacious #attach-file-btn { min-width: 20; height: 5; min-height: 5; }
+.density-spacious #stop-btn { height: 5; min-height: 5; min-width: 10; }
+.density-spacious .attach-chip { min-height: 5; min-width: 14; }
+.density-spacious #main-chat-stream, .density-spacious #chat-messages-worker { padding: 0 2; }
+.density-spacious #agents-panel-title { padding: 0 1; min-height: 3; }
+.density-spacious #tree-root-label { padding: 0 1; }
 
 /* ═══════════════════════════════════════════════════
    THEME: MONOKAI
@@ -911,9 +941,9 @@ TextArea {
 .theme-monokai Underline { color: #A6E22E; }
 
 .theme-monokai #col-left { border-right: solid #49483E; }
-.theme-monokai #ai-chat { border-left: solid #49483E; }
 .theme-monokai #file-explorer { border-bottom: solid #49483E; }
-.theme-monokai #code-editor { border-bottom: solid #49483E; }
+.theme-monokai #active-agents { border-top: solid #49483E; }
+.theme-monokai #workspace-center { border-left: solid #49483E; }
 
 .theme-monokai FilteredDirectoryTree { background: #272822; scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
 .theme-monokai FilteredDirectoryTree > .tree--cursor { background: #49483E; }
@@ -929,9 +959,11 @@ TextArea {
 .theme-monokai .file-actions #btn-ctx { background: #49483E; color: #66D9EF; }
 .theme-monokai .file-actions #btn-ctx:hover { background: #66D9EF; color: #272822; }
 
-.theme-monokai #chat-messages { background: #272822; scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
-.theme-monokai #chat-input-area { background: #3E3D32; }
+.theme-monokai #main-chat-stream, .theme-monokai #chat-messages-worker { background: #272822; scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
+.theme-monokai #chat-input-area { background: #272822; }
 .theme-monokai #chat-input { background: #272822; color: #F8F8F2; border: solid #49483E; }
+.theme-monokai #ctx-progress-visual { color: #75715E; }
+.theme-monokai #ctx-session-line { color: #75715E; }
 .theme-monokai #send-btn { background: #A6E22E; color: #272822; }
 .theme-monokai #send-btn:hover { background: #B8F32E; }
 .theme-monokai #mode-toggle { background: #49483E; color: #F8F8F2; }
@@ -946,30 +978,23 @@ TextArea {
 .theme-monokai .term-fallback RichLog { background: #272822; }
 .theme-monokai .term-fallback Input { background: #3E3D32; color: #F8F8F2; border: solid #49483E; }
 
-.theme-monokai #code-editor TextArea { background: #272822; }
+.theme-monokai #workspace-center TextArea { background: #272822; }
 .theme-monokai #commit-input { background: #272822; color: #F8F8F2; border: solid #49483E; }
 .theme-monokai #commit-btn { background: #A6E22E; color: #272822; }
 .theme-monokai #commit-btn:hover { background: #B8F32E; }
 
-.theme-monokai #version-control Button { background: #49483E; color: #F8F8F2; }
-.theme-monokai #version-control Button:hover { background: #A6E22E; color: #272822; }
-.theme-monokai #version-control Tree { background: #272822; scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
-.theme-monokai #version-control Tree > .tree--cursor { background: #49483E; }
+.theme-monokai #active-agents Tree { background: #272822; scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
+.theme-monokai #active-agents Tree > .tree--cursor { background: #49483E; }
 
 .theme-monokai #settings-panel Label { color: #A6E22E; }
-.theme-monokai #ai-settings Label { color: #A6E22E; }
-.theme-monokai #ai-settings Button { background: #A6E22E; color: #272822; }
-.theme-monokai #ai-settings Input { background: #272822; color: #F8F8F2; border: solid #49483E; }
 
 .theme-monokai RichLog { scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
 .theme-monokai Tree { scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
 .theme-monokai TextArea { scrollbar-color: #A6E22E; scrollbar-background: #3E3D32; }
 
-.theme-monokai #creator-tree { background: #272822; scrollbar-color: #A6E22E; }
-.theme-monokai #creator-tree > .tree--cursor { background: #49483E; }
-.theme-monokai #agent-detail-log { background: #272822; border-top: solid #49483E; }
-.theme-monokai #agents-header { background: #3E3D32; color: #A6E22E; }
-.theme-monokai #agent-detail-header { background: #3E3D32; color: #A6E22E; }
+.theme-monokai #agents-tree { background: #272822; scrollbar-color: #A6E22E; }
+.theme-monokai #agents-tree > .tree--cursor { background: #49483E; }
+.theme-monokai #agents-panel-title { background: #3E3D32; color: #A6E22E; }
 
 /* ═══════════════════════════════════════════════════
    THEME: GREEN TERMINAL
@@ -988,9 +1013,9 @@ TextArea {
 .theme-green Underline { color: #00ff41; }
 
 .theme-green #col-left { border-right: solid #143314; }
-.theme-green #ai-chat { border-left: solid #143314; }
 .theme-green #file-explorer { border-bottom: solid #143314; }
-.theme-green #code-editor { border-bottom: solid #143314; }
+.theme-green #active-agents { border-top: solid #143314; }
+.theme-green #workspace-center { border-left: solid #143314; }
 
 .theme-green FilteredDirectoryTree { background: #0a0a0a; color: #00ff41; scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
 .theme-green FilteredDirectoryTree > .tree--cursor { background: #143314; color: #00ff41; }
@@ -1006,9 +1031,11 @@ TextArea {
 .theme-green .file-actions #btn-ctx { background: #143314; color: #33ff99; }
 .theme-green .file-actions #btn-ctx:hover { background: #33ff99; color: #0a0a0a; }
 
-.theme-green #chat-messages { background: #0a0a0a; scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
-.theme-green #chat-input-area { background: #0d1f0d; }
+.theme-green #main-chat-stream, .theme-green #chat-messages-worker { background: #0a0a0a; scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
+.theme-green #chat-input-area { background: #0a0a0a; }
 .theme-green #chat-input { background: #0a0a0a; color: #00ff41; border: solid #143314; }
+.theme-green #ctx-progress-visual { color: #00cc33; }
+.theme-green #ctx-session-line { color: #009922; }
 .theme-green #send-btn { background: #00ff41; color: #0a0a0a; }
 .theme-green #send-btn:hover { background: #33ff66; }
 .theme-green #mode-toggle { background: #143314; color: #00ff41; }
@@ -1022,15 +1049,13 @@ TextArea {
 .theme-green .term-fallback RichLog { background: #0a0a0a; }
 .theme-green .term-fallback Input { background: #0d1f0d; color: #00ff41; border: solid #143314; }
 
-.theme-green #code-editor TextArea { background: #0a0a0a; }
+.theme-green #workspace-center TextArea { background: #0a0a0a; }
 .theme-green #commit-input { background: #0a0a0a; color: #00ff41; border: solid #143314; }
 .theme-green #commit-btn { background: #00ff41; color: #0a0a0a; }
 .theme-green #commit-btn:hover { background: #33ff66; }
 
-.theme-green #version-control Button { background: #143314; color: #00ff41; }
-.theme-green #version-control Button:hover { background: #00ff41; color: #0a0a0a; }
-.theme-green #version-control Tree { background: #0a0a0a; color: #00ff41; scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
-.theme-green #version-control Tree > .tree--cursor { background: #143314; }
+.theme-green #active-agents Tree { background: #0a0a0a; color: #00ff41; scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
+.theme-green #active-agents Tree > .tree--cursor { background: #143314; }
 
 .theme-green #settings-panel Label { color: #00ff41; }
 .theme-green #ai-settings Label { color: #00ff41; }
@@ -1041,11 +1066,9 @@ TextArea {
 .theme-green Tree { scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
 .theme-green TextArea { scrollbar-color: #00ff41; scrollbar-background: #0d1f0d; }
 
-.theme-green #creator-tree { background: #0a0a0a; color: #00ff41; scrollbar-color: #00ff41; }
-.theme-green #creator-tree > .tree--cursor { background: #143314; }
-.theme-green #agent-detail-log { background: #0a0a0a; border-top: solid #143314; }
-.theme-green #agents-header { background: #0d1f0d; color: #00ff41; }
-.theme-green #agent-detail-header { background: #0d1f0d; color: #00ff41; }
+.theme-green #agents-tree { background: #0a0a0a; color: #00ff41; scrollbar-color: #00ff41; }
+.theme-green #agents-tree > .tree--cursor { background: #143314; }
+.theme-green #agents-panel-title { background: #0d1f0d; color: #00ff41; }
 
 /* ═══════════════════════════════════════════════════
    THEME: BLUE OCEAN
@@ -1064,9 +1087,9 @@ TextArea {
 .theme-blue Underline { color: #3B82F6; }
 
 .theme-blue #col-left { border-right: solid #1E293B; }
-.theme-blue #ai-chat { border-left: solid #1E293B; }
 .theme-blue #file-explorer { border-bottom: solid #1E293B; }
-.theme-blue #code-editor { border-bottom: solid #1E293B; }
+.theme-blue #active-agents { border-top: solid #1E293B; }
+.theme-blue #workspace-center { border-left: solid #1E293B; }
 
 .theme-blue FilteredDirectoryTree { background: #0a0e1a; scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
 .theme-blue FilteredDirectoryTree > .tree--cursor { background: #1E293B; color: #CBD5E1; }
@@ -1082,9 +1105,11 @@ TextArea {
 .theme-blue .file-actions #btn-ctx { background: #1E293B; color: #60A5FA; }
 .theme-blue .file-actions #btn-ctx:hover { background: #3B82F6; color: #ffffff; }
 
-.theme-blue #chat-messages { background: #0a0e1a; scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
-.theme-blue #chat-input-area { background: #0f1729; }
+.theme-blue #main-chat-stream, .theme-blue #chat-messages-worker { background: #0a0e1a; scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
+.theme-blue #chat-input-area { background: #0a0e1a; }
 .theme-blue #chat-input { background: #0a0e1a; color: #CBD5E1; border: solid #1E293B; }
+.theme-blue #ctx-progress-visual { color: #94A3B8; }
+.theme-blue #ctx-session-line { color: #64748B; }
 .theme-blue #send-btn { background: #3B82F6; color: #ffffff; }
 .theme-blue #send-btn:hover { background: #60A5FA; }
 .theme-blue #mode-toggle { background: #1E293B; color: #CBD5E1; }
@@ -1098,15 +1123,13 @@ TextArea {
 .theme-blue .term-fallback RichLog { background: #0a0e1a; }
 .theme-blue .term-fallback Input { background: #0f1729; color: #CBD5E1; border: solid #1E293B; }
 
-.theme-blue #code-editor TextArea { background: #0a0e1a; }
+.theme-blue #workspace-center TextArea { background: #0a0e1a; }
 .theme-blue #commit-input { background: #0a0e1a; color: #CBD5E1; border: solid #1E293B; }
 .theme-blue #commit-btn { background: #3B82F6; color: #ffffff; }
 .theme-blue #commit-btn:hover { background: #60A5FA; }
 
-.theme-blue #version-control Button { background: #1E293B; color: #CBD5E1; }
-.theme-blue #version-control Button:hover { background: #3B82F6; color: #ffffff; }
-.theme-blue #version-control Tree { background: #0a0e1a; scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
-.theme-blue #version-control Tree > .tree--cursor { background: #1E293B; }
+.theme-blue #active-agents Tree { background: #0a0e1a; scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
+.theme-blue #active-agents Tree > .tree--cursor { background: #1E293B; }
 
 .theme-blue #settings-panel Label { color: #60A5FA; }
 .theme-blue #ai-settings Label { color: #60A5FA; }
@@ -1117,8 +1140,6 @@ TextArea {
 .theme-blue Tree { scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
 .theme-blue TextArea { scrollbar-color: #3B82F6; scrollbar-background: #0f1729; }
 
-.theme-blue #creator-tree { background: #0a0e1a; scrollbar-color: #3B82F6; }
-.theme-blue #creator-tree > .tree--cursor { background: #1E293B; }
-.theme-blue #agent-detail-log { background: #0a0e1a; border-top: solid #1E293B; }
-.theme-blue #agents-header { background: #0f1729; color: #60A5FA; }
-.theme-blue #agent-detail-header { background: #0f1729; color: #60A5FA; }
+.theme-blue #agents-tree { background: #0a0e1a; scrollbar-color: #3B82F6; }
+.theme-blue #agents-tree > .tree--cursor { background: #1E293B; }
+.theme-blue #agents-panel-title { background: #0f1729; color: #60A5FA; }

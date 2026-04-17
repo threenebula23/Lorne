@@ -22,7 +22,14 @@ try:
     )
 except ImportError:
     def display_agent_action(sn, name, args): print(f"  Tool: {name}")
-    def display_tool_result(sn, name, result): print(f"  Result: {name}")
+    def display_tool_result(sn, name, result):
+        print(f"  Result: {name}")
+        try:
+            b = get_bridge()
+            if b:
+                b.on_tool_result(name, result)
+        except Exception:
+            pass
     def print_warning(m): print(f"  ⚠ {m}")
     def print_error(m): print(f"  ✗ {m}")
     def print_thinking(t=""): print(f"  Thinking: {t}")
@@ -161,11 +168,16 @@ class AgentGraph:
     _READ_ONLY_TOOLS = frozenset({
         "read_file", "list_files", "search_in_files", "rag_search",
         "get_file_line_count", "load_plan", "git_log", "git_diff", "git_status",
+        "web_search", "web_fetch", "web_search_and_read",
+        "ocr_read_file_soft", "ocr_read_image_medium", "ocr_read_photo_strong",
+        "office_document_read",
     })
 
     _FILE_TOOLS = frozenset({
         "read_file", "edit_file", "write_file", "create_code_file",
-        "append_code_snippet",
+        "append_code_snippet", "replace_file_lines", "insert_file_lines",
+        "docx_document_create", "docx_document_append_paragraphs", "docx_document_patch_paragraphs",
+        "pdf_styled_document_create",
     })
 
     def _run_single_tool(self, idx: int, tc_norm: dict) -> ToolMessage:
@@ -190,7 +202,9 @@ class AgentGraph:
             )
             bridge.on_action(tool_name, args_preview)
             if tool_name in self._FILE_TOOLS:
-                fpath = tool_args.get("file_path", tool_args.get("path", ""))
+                fpath = tool_args.get(
+                    "file_path", tool_args.get("path", tool_args.get("filename", "")),
+                )
                 if fpath:
                     bridge.on_file_working(str(fpath))
 
@@ -210,23 +224,25 @@ class AgentGraph:
         parsed = result if isinstance(result, (dict, list)) else str(result)
         display_tool_result(idx + 1, tool_name, parsed)
 
-        if bridge:
-            bridge.on_tool_result(tool_name, parsed)
-            if tool_name in self._FILE_TOOLS and isinstance(parsed, dict):
-                content = parsed.get("content", "")
-                fpath = parsed.get("file_path", parsed.get("path", ""))
-                if content and fpath:
-                    lang = "python"
-                    ext = str(fpath).rsplit(".", 1)[-1] if "." in str(fpath) else ""
-                    lang_map = {
-                        "js": "javascript", "ts": "typescript", "tsx": "typescript",
-                        "json": "json", "md": "markdown", "css": "css",
-                        "html": "html", "sh": "bash", "yaml": "yaml", "yml": "yaml",
-                    }
-                    lang = lang_map.get(ext, "python")
-                    bridge.on_code(str(content)[:3000], lang, str(fpath))
-                if parsed.get("action") in ("edited", "written", "created"):
-                    bridge.on_file_changed(str(fpath))
+        if bridge and tool_name in self._FILE_TOOLS and isinstance(parsed, dict):
+            content = parsed.get("content", "")
+            fpath = parsed.get("file_path", parsed.get("path", ""))
+            if content and fpath:
+                lang = "python"
+                ext = str(fpath).rsplit(".", 1)[-1] if "." in str(fpath) else ""
+                lang_map = {
+                    "js": "javascript", "ts": "typescript", "tsx": "typescript",
+                    "json": "json", "md": "markdown", "css": "css",
+                    "html": "html", "sh": "bash", "yaml": "yaml", "yml": "yaml",
+                }
+                lang = lang_map.get(ext, "python")
+                bridge.on_code(str(content)[:3000], lang, str(fpath))
+            if fpath and parsed.get("action") in (
+                "edited", "written", "created", "created_file",
+                "lines_replaced", "lines_inserted", "code_written", "snippet_appended",
+                "appended", "patched", "pdf_created",
+            ):
+                bridge.on_file_changed(str(fpath))
 
         content_str = annotate_errors(tool_name, result)
         return ToolMessage(

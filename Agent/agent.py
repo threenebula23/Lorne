@@ -64,6 +64,11 @@ except ImportError:
     from Agent.creator_mode import run_creator_mode
 
 try:
+    from .creator_summary import format_creator_summary_text
+except ImportError:
+    from Agent.creator_summary import format_creator_summary_text
+
+try:
     from .creator_provider import get_creator_config, save_creator_config, check_local_server
 except ImportError:
     from Agent.creator_provider import get_creator_config, save_creator_config, check_local_server
@@ -254,51 +259,58 @@ _init_llm(MODEL_PROFILE)
 
 # ─── Creator Mode details printer ──────────────────────────────────
 
-def _print_creator_details(creator_result: dict):
+def _print_creator_details(creator_result: dict, *, worker_panels: bool = True) -> None:
+    """Rich/plain: опционально панели по воркерам; всегда — список недавно изменённых файлов."""
     if not creator_result or not creator_result.get("results"):
         return
 
-    if HAS_RICH and console:
-        from rich.panel import Panel as RPanel
-        from rich import box as rbox
+    if worker_panels:
+        if HAS_RICH and console:
+            from rich.panel import Panel as RPanel
+            from rich import box as rbox
 
-        console.print("\n[bold]Детальные отчеты агентов:[/bold]")
-        for r in creator_result.get("results", []):
-            color = "green" if r["status"] == "done" else "red"
-            icon = "✓" if r["status"] == "done" else "✗"
-            task_title = r.get("task", "")
-            title = f"[{color}]{icon} {r.get('worker_id', 'Unknown')}[/{color}] - {task_title[:60]}"
-            content = str(r.get("result", "Нет данных"))
-            console.print(RPanel(
-                content, title=title, border_style=color,
-                box=rbox.ROUNDED, padding=(1, 2),
-            ))
+            console.print("\n[bold]Детальные отчеты агентов:[/bold]")
+            for r in creator_result.get("results", []):
+                color = "green" if r["status"] == "done" else "red"
+                icon = "✓" if r["status"] == "done" else "✗"
+                task_title = r.get("task", "")
+                title = f"[{color}]{icon} {r.get('worker_id', 'Unknown')}[/{color}] - {task_title[:60]}"
+                content = str(r.get("result", "Нет данных"))
+                console.print(RPanel(
+                    content, title=title, border_style=color,
+                    box=rbox.ROUNDED, padding=(1, 2),
+                ))
+        else:
+            print("\nДетальные отчеты агентов:")
+            for r in creator_result.get("results", []):
+                icon = "✓" if r["status"] == "done" else "✗"
+                print(f"\n{icon} {r.get('worker_id', 'Unknown')} - {r.get('task', '')[:60]}")
+                print("-" * 40)
+                print(r.get("result", "Нет данных"))
+                print("-" * 40)
 
-        t_start = time.time() - creator_result.get("elapsed", 0)
-        modified_files = []
-        try:
-            for p in Path.cwd().rglob("*"):
-                if p.is_file() and not any(part.startswith('.') for part in p.parts):
-                    if p.stat().st_mtime > t_start:
-                        try:
-                            modified_files.append(str(p.relative_to(Path.cwd())))
-                        except ValueError:
-                            pass
-        except Exception:
-            pass
+    t_start = time.time() - creator_result.get("elapsed", 0)
+    modified_files: List[str] = []
+    try:
+        for p in Path.cwd().rglob("*"):
+            if p.is_file() and not any(part.startswith(".") for part in p.parts):
+                if p.stat().st_mtime > t_start:
+                    try:
+                        modified_files.append(str(p.relative_to(Path.cwd())))
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
 
-        if modified_files:
+    if modified_files:
+        if HAS_RICH and console:
             console.print("\n[bold green]Измененные файлы:[/bold green]")
             for f in sorted(modified_files):
                 console.print(f"  [dim]-[/dim] {f}")
-    else:
-        print("\nДетальные отчеты агентов:")
-        for r in creator_result.get("results", []):
-            icon = "✓" if r["status"] == "done" else "✗"
-            print(f"\n{icon} {r.get('worker_id', 'Unknown')} - {r.get('task', '')[:60]}")
-            print("-" * 40)
-            print(r.get("result", "Нет данных"))
-            print("-" * 40)
+        else:
+            print("\nИзмененные файлы:")
+            for f in sorted(modified_files):
+                print(f"  - {f}")
 
 
 # ─── Main loop ──────────────────────────────────────────────────────
@@ -583,15 +595,12 @@ def run_coding_agent_loop():
                 tools=tools,
                 project_context=project_structure,
             )
-            _print_creator_details(creator_result)
-
-            summary_parts = [f"Creator Mode выполнил задачу: {user_input}"]
-            for r in creator_result.get("results", []):
-                status_icon = "✓" if r["status"] == "done" else "✗"
-                summary_parts.append(f"  {status_icon} {r['worker_id']}: {r['task'][:60]}")
-                if r.get("result"):
-                    summary_parts.append(f"    Результат: {r['result']}")
-            summary_text = "\n".join(summary_parts)
+            summary_text = format_creator_summary_text(creator_result)
+            try:
+                display_model_reply(0, summary_text, None)
+            except Exception:
+                pass
+            _print_creator_details(creator_result, worker_panels=False)
             messages.append(HumanMessage(content=f"[Creator Mode результат]\n{summary_text}"))
             messages.append(AIMessage(content=summary_text))
             try:
@@ -717,21 +726,6 @@ def run_tui_mode():
     research_mode_active = [False]
     tui_agent_mode = ["normal"]
 
-    def _format_creator_summary(cr: Dict[str, Any]) -> str:
-        if not cr:
-            return "Creator mode finished."
-        lines = [
-            f"**Creator mode** — {cr.get('status', '?')} | "
-            f"workers OK: {cr.get('workers_done', 0)}/{cr.get('workers_total', 0)} | "
-            f"{cr.get('elapsed', 0):.1f}s",
-        ]
-        for r in cr.get("results", [])[:24]:
-            wid = r.get("worker_id", "?")
-            st = r.get("status", "?")
-            res = str(r.get("result", ""))[:800]
-            lines.append(f"\n### {wid} ({st})\n{res}")
-        return "\n".join(lines)
-
     def handle_chat_submit(text: str):
         """Called from TUI when user sends a chat message (already in bg thread via Textual)."""
         nonlocal messages
@@ -801,8 +795,16 @@ def run_tui_mode():
                             tools=tools,
                             project_context=project_structure,
                         )
-                        summary = _format_creator_summary(creator_result)
-                        bridge.on_model_reply(summary)
+                        summary = format_creator_summary_text(creator_result)
+                        est_out = max(1, len(summary) // 3)
+                        bridge.on_model_reply(
+                            summary,
+                            {
+                                "prompt_tokens": 0,
+                                "completion_tokens": est_out,
+                                "_estimated": True,
+                            },
+                        )
                         messages.append(AIMessage(content=summary))
                     except Exception as ce:
                         bridge.on_error(f"Creator error: {ce}")
@@ -852,7 +854,16 @@ def run_tui_mode():
 
                         content = str(msg.content or "").strip()
                         if content and not getattr(msg, "tool_calls", None):
-                            bridge_ref.on_model_reply(content)
+                            usage_out: Dict[str, Any] = {}
+                            if isinstance(usage, dict):
+                                inp = usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
+                                out = usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
+                                if inp or out:
+                                    usage_out = {
+                                        "prompt_tokens": int(inp),
+                                        "completion_tokens": int(out),
+                                    }
+                            bridge_ref.on_model_reply(content, usage_out or None)
                 old_len = len(msgs)
         except Exception as e:
             tb = traceback.format_exc()
@@ -893,12 +904,12 @@ def run_tui_mode():
         try:
             if mode_lower == "creator":
                 app.call_from_thread(
-                    app.chat.update_creator_tree,
+                    app.active_agents.update_creator_tree,
                     {"worker_id": "creator", "status": "working", "task": "Creator mode", "children": []},
                 )
             elif mode_lower == "research":
                 app.call_from_thread(
-                    app.chat.update_creator_tree,
+                    app.active_agents.update_creator_tree,
                     {
                         "worker_id": "research",
                         "status": "working",
@@ -909,12 +920,12 @@ def run_tui_mode():
                 )
             elif mode_lower == "agent":
                 app.call_from_thread(
-                    app.chat.update_creator_tree,
+                    app.active_agents.update_creator_tree,
                     {"worker_id": "agent", "status": "working", "task": "Agent mode", "children": []},
                 )
             else:
                 app.call_from_thread(
-                    app.chat.update_creator_tree,
+                    app.active_agents.update_creator_tree,
                     {"worker_id": "idle", "status": "pending", "task": "No active mode", "children": []},
                 )
         except Exception:

@@ -78,8 +78,8 @@ class TUIBridge:
     def on_success(self, text: str) -> None:
         self._call(self.app.chat.add_success, text)
 
-    def on_model_reply(self, text: str) -> None:
-        self._call(self.app.chat.add_assistant_message, text)
+    def on_model_reply(self, text: str, usage: Optional[Dict[str, Any]] = None) -> None:
+        self._call(self.app.chat.add_assistant_message, text, usage)
 
     def on_separator(self, label: str = "") -> None:
         self._call(self.app.chat.add_separator, label)
@@ -117,6 +117,9 @@ class TUIBridge:
         elif isinstance(result, str):
             summary = result[:80]
         self._call(self.app.chat.add_tool_result, tool_name, summary)
+        if isinstance(result, dict):
+            self._call(self.app.chat.accumulate_tool_result, tool_name, result)
+            self._call(self.app.chat.accumulate_web_tool_result, tool_name, result)
 
     def on_code_separator(self) -> None:
         pass
@@ -161,7 +164,7 @@ class TUIBridge:
     # ─── Creator mode ────────────────────────────────
 
     def on_creator_tree(self, tree_data: dict) -> None:
-        self._call(self.app.chat.update_creator_tree, tree_data)
+        self._call(self.app.active_agents.update_creator_tree, tree_data)
 
     def on_creator_worker_update(self, worker_id: str, tool_name: str = "",
                                   action: str = "", thinking: str = "") -> None:
@@ -214,6 +217,24 @@ class TUIBridge:
         self._call(_show)
         if self._input_event:
             self._input_event.wait(timeout=120)
+        return self._input_result
+
+    def request_user_choice(self, question: str) -> str:
+        """Yes/No (+ optional custom text) for ask_user; blocks until answered."""
+        self._input_event = threading.Event()
+        self._input_result = ""
+
+        def _show():
+            from Interface.panels.file_explorer import _AskUserDialog
+            def _on_choice(value: str):
+                self._input_result = value
+                if self._input_event:
+                    self._input_event.set()
+            self.app.push_screen(_AskUserDialog(question, _on_choice))
+
+        self._call(_show)
+        if self._input_event:
+            self._input_event.wait(timeout=600)
         return self._input_result
 
     # ─── Lifecycle ───────────────────────────────────

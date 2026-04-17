@@ -1,20 +1,14 @@
 @echo off
-REM ═══════════════════════════════════════════════════════
-REM  TCA — Terminal Coding Assistant — Деинсталляция (Windows)
-REM ═══════════════════════════════════════════════════════
-REM
-REM  Этот скрипт:
-REM  1. Удаляет виртуальное окружение (.venv)
-REM  2. Опционально удаляет данные сессий, версий и конфиг
-REM
-REM  Использование:
-REM    uninstall.bat
-REM ═══════════════════════════════════════════════════════
-
+REM TCA — Deinstallyatsiya (Windows)
+chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 set "TCA_DIR=%~dp0"
 set "TCA_DIR=%TCA_DIR:~0,-1%"
+
+for /f %%t in ('powershell -NoProfile -Command "[int64]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"') do set "T0=%%t"
+set "TOTAL_STEPS=5"
+set "USTEP=0"
 
 echo.
 echo ╔══════════════════════════════════════════════╗
@@ -22,44 +16,71 @@ echo ║  TCA — Деинсталляция                        ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 
-REM ─── Remove virtual environment (includes tca.bat) ──
-set "VENV_DIR=%TCA_DIR%\.venv"
+goto :after_u_prog
+:u_progress
+set /a USTEP+=1
+set "UMSG=%~1"
+set /a UF=!USTEP! * 14 / !TOTAL_STEPS!
+if !UF! gtr 14 set UF=14
+set /a UE=14-UF
+set "UBF="
+set "UBE="
+for /l %%i in (1,1,!UF!) do set "UBF=!UBF!#"
+for /l %%i in (1,1,!UE!) do set "UBE=!UBE!-"
+for /f %%e in ('powershell -NoProfile -Command "([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) - !T0!"') do set "UEL=%%e"
+echo   [!UBF!!UBE!] !USTEP!/!TOTAL_STEPS!  !UEL!s  !UMSG!
+exit /b 0
+:after_u_prog
 
-if exist "%VENV_DIR%" (
-    echo   ... Удаляю виртуальное окружение...
-    rmdir /s /q "%VENV_DIR%"
-    echo   √ Виртуальное окружение удалено ^(включая tca.bat^)
-) else (
-    echo   Виртуальное окружение не найдено
+call :u_progress "Udalyayu globalnyy zapuskach tca..."
+if exist "%LOCALAPPDATA%\TCA\tca.cmd" (
+    del /q "%LOCALAPPDATA%\TCA\tca.cmd" 2>nul
+    if exist "%LOCALAPPDATA%\TCA" dir /b "%LOCALAPPDATA%\TCA" 2>nul | findstr /r "." >nul || rmdir "%LOCALAPPDATA%\TCA" 2>nul
 )
 
-REM ─── Remove TCA data files (optional) ─────────────
+call :u_progress "Udalyayu virtualnoe okruzhenie..."
+set "VENV_DIR=%TCA_DIR%\.venv"
+if exist "%VENV_DIR%" (
+    rmdir /s /q "%VENV_DIR%"
+    echo   OK: .venv udalen
+) else (
+    echo   .venv ne nayden
+)
+
+call :u_progress "Opcionalno: dannye..."
 echo.
-set /p "answer=  Удалить данные сессий, версий и конфиг? [y/N] > "
+set /p "answer=  Udalit dannye sessiy, versiy i konfig? [y/N] > "
 if /i "!answer!" == "y" (
+    if exist "%TCA_DIR%\.tca" rmdir /s /q "%TCA_DIR%\.tca"
     if exist "%TCA_DIR%\.tca_checkpoints.sqlite" del /q "%TCA_DIR%\.tca_checkpoints.sqlite"
     if exist "%TCA_DIR%\.tca_versions.sqlite" del /q "%TCA_DIR%\.tca_versions.sqlite"
     if exist "%TCA_DIR%\.tca_plan.json" del /q "%TCA_DIR%\.tca_plan.json"
     if exist "%USERPROFILE%\.tca_config.json" del /q "%USERPROFILE%\.tca_config.json"
-    echo   √ Данные удалены
+    echo   OK: dannye udaleny
 ) else (
-    echo   Данные сохранены
+    echo   dannye sokhraneny
 )
 
-REM ─── Remove __pycache__ ────────────────────────────
+call :u_progress "Chistka __pycache__..."
 for /d /r "%TCA_DIR%" %%D in (__pycache__) do (
     if exist "%%D" rmdir /s /q "%%D"
 )
-echo   √ Кэш Python очищен
+echo   OK: kesh ochischen
 
-REM ─── Done ──────────────────────────────────────────
+call :u_progress "Gotovo"
+
+for /f %%e in ('powershell -NoProfile -Command "([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) - !T0!"') do set "USEC=%%e"
+
 echo.
 echo ╔══════════════════════════════════════════════╗
-echo ║  √ TCA деинсталлирован                      ║
+echo ║  OK TCA deinstallyirovan                    ║
 echo ╚══════════════════════════════════════════════╝
 echo.
-echo   Исходный код остался в: %TCA_DIR%
-echo   Для полного удаления удалите папку вручную.
+echo   Vremya: !USEC! s
+echo.
+echo   Ishodnyy kod ostalsya v: %TCA_DIR%
+echo   Udalite papku vruchnuyu dlya polnogo udaleniya.
+echo   Primenenie PATH: otkroyte novyy CMD posle udaleniya tca iz PATH vruchnuyu esli nuzhno.
 echo.
 
 endlocal

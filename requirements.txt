@@ -28,3 +28,9 @@ reportlab>=4.0.0
 pyfiglet>=0.8.0
 # Image support for TCA
 pillow>=10.0.0
+# OCR (needs system `tesseract` in PATH; optional `tesseract-langpack-rus` for Russian)
+pytesseract>=0.3.10
+# PDF text layer extraction for ocr_read_file_soft (no OCR raster)
+pymupdf>=1.23.0
+# Word .docx read/write with styles (python-docx)
+python-docx>=1.1.0

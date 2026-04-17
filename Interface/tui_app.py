@@ -1,8 +1,10 @@
-"""TCA IDE — full-screen terminal IDE with 6 panels + drag resize."""
+"""TCA IDE — чат-центричный TUI: файлы слева сверху, агенты слева снизу, вкладки по центру."""
 from __future__ import annotations
 
 import shlex
+import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -10,98 +12,22 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.events import MouseDown, MouseMove, MouseUp
-from textual.widgets import Header, Static, Button
-from textual.widget import Widget
+from textual.widgets import Header, Static, Button, TextArea
+
+from Interface.ui_prefs import load_prefs
+from Interface.themes import apply_theme
 
 from .panels.file_explorer import (
-    FileExplorerPanel, FileSelected, AddToContext, GitCommitRequested,
-    RunFileRequested,
+    FileExplorerPanel, FileSelected, AddToContext, RunFileRequested,
 )
-from .panels.code_editor import CodeEditorPanel, FileSaved
-from .panels.terminal_panel import TerminalPanel
-from .panels.version_control import VersionControlPanel, BranchSwitched
+from .panels.code_editor import FileEditorTabPane, FileSaved, CloseWorkspaceTab
+from .panels.workspace_center import WorkspaceCenter, CHAT_TAB_ID
+from .panels.active_agents_panel import (
+    ActiveAgentsPanel, AgentWorkerSelected, AgentMainChatSelected,
+)
 from .panels.ai_chat import (
     AIChatPanel, ChatSubmitted, ModelChanged, ModeToggled, StopRequested,
 )
-from .panels.image_viewer import ImageViewerPanel
-
-
-class ResizeHandle(Widget):
-    """Draggable resize handle placed between panels."""
-
-    DEFAULT_CSS = """
-    ResizeHandle {
-        width: 1;
-        height: 1fr;
-        background: #2D2D3D;
-        min-width: 1;
-        max-width: 1;
-    }
-    ResizeHandle:hover {
-        background: #8B5CF6;
-    }
-    ResizeHandle.dragging {
-        background: #A78BFA;
-    }
-    ResizeHandle.horizontal {
-        width: 1fr;
-        height: 1;
-        min-height: 1;
-        max-height: 1;
-        min-width: auto;
-        max-width: 100%;
-    }
-    """
-
-    def __init__(self, target_id: str, direction: str = "left",
-                 min_size: int = 14, max_size: int = 60, **kwargs):
-        super().__init__(**kwargs)
-        self._target_id = target_id
-        self._direction = direction
-        self._min_size = min_size
-        self._max_size = max_size
-        self._dragging = False
-        self._start_x = 0
-        self._start_y = 0
-        self._start_size = 0
-
-    def on_mouse_down(self, event: MouseDown) -> None:
-        self._dragging = True
-        self._start_x = event.screen_x
-        self._start_y = event.screen_y
-        self.add_class("dragging")
-        self.capture_mouse()
-        try:
-            target = self.app.query_one(f"#{self._target_id}")
-            w = target.size.width
-            h = target.size.height
-            self._start_size = w if self._direction in ("left", "right") else h
-        except Exception:
-            self._start_size = 30
-
-    def on_mouse_move(self, event: MouseMove) -> None:
-        if not self._dragging:
-            return
-        if self._direction == "left":
-            delta = event.screen_x - self._start_x
-            new_size = max(self._min_size, min(self._max_size, self._start_size + delta))
-        elif self._direction == "right":
-            delta = self._start_x - event.screen_x
-            new_size = max(self._min_size, min(self._max_size, self._start_size + delta))
-        else:
-            return
-        try:
-            target = self.app.query_one(f"#{self._target_id}")
-            target.styles.width = new_size
-        except Exception:
-            pass
-
-    def on_mouse_up(self, event: MouseUp) -> None:
-        if self._dragging:
-            self._dragging = False
-            self.remove_class("dragging")
-            self.release_mouse()
 
 
 class TCAApp(App):
@@ -109,7 +35,7 @@ class TCAApp(App):
 
     CSS_PATH = "tui_app.tcss"
     TITLE = "TCA — Terminal Coding Assistant"
-    LAYERS = ["base", "terminal", "overlay"]
+    LAYERS = ["base", "overlay"]
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Exit", show=True, priority=True),
@@ -117,18 +43,12 @@ class TCAApp(App):
         Binding("ctrl+f", "toggle_find", "Find", show=False),
         Binding("ctrl+g", "goto_line", "Go to Line", show=False),
         Binding("ctrl+w", "close_tab", "Close Tab", show=False),
-        Binding("ctrl+backslash", "focus_terminal", "Terminal", show=False),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False),
-        Binding("ctrl+t", "new_terminal", "New Terminal", show=False),
         Binding("escape", "focus_chat", "Chat", show=False),
         Binding("f5", "run_current_file", "Run File", show=False),
         Binding("ctrl+shift+x", "stop_agent", "Stop Agent", show=False),
         Binding("f6", "resize_left_smaller", "Left -", show=False),
         Binding("f7", "resize_left_larger", "Left +", show=False),
-        Binding("f8", "resize_right_smaller", "Right -", show=False),
-        Binding("f9", "resize_right_larger", "Right +", show=False),
-        Binding("f10", "resize_bottom_toggle", "Toggle Terminal", show=False),
-        Binding("ctrl+shift+t", "toggle_terminal_fullscreen", "Maximize Terminal", show=False),
     ]
 
     def __init__(
@@ -150,8 +70,20 @@ class TCAApp(App):
         self._on_mode_toggle = on_mode_toggle
         self._bridge = None
         self._left_width = 28
-        self._right_width = 38
         self._mode_name = "normal"
+
+    def on_mount(self) -> None:
+        prefs = load_prefs()
+        try:
+            apply_theme(self, str(prefs.get("theme", "Purple Dark")))
+        except Exception:
+            pass
+        dens = str(prefs.get("density", "normal"))
+        if dens not in ("compact", "normal", "spacious"):
+            dens = "normal"
+        for d in ("compact", "normal", "spacious"):
+            self.remove_class(f"density-{d}")
+        self.add_class(f"density-{dens}")
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -160,125 +92,96 @@ class TCAApp(App):
         with Horizontal(id="main"):
             with Vertical(id="col-left"):
                 yield FileExplorerPanel(id="file-explorer")
-                yield VersionControlPanel(id="version-control")
-            yield ResizeHandle(
-                target_id="col-left", direction="left",
-                min_size=14, max_size=50, id="resize-left",
-            )
-            with Vertical(id="col-center"):
-                yield CodeEditorPanel(id="code-editor")
-                yield ImageViewerPanel(id="image-viewer")
-                yield TerminalPanel(id="terminal-panel")
-            yield ResizeHandle(
-                target_id="ai-chat", direction="right",
-                min_size=22, max_size=60, id="resize-right",
-            )
-            yield AIChatPanel(
+                yield ActiveAgentsPanel(id="active-agents")
+            yield WorkspaceCenter(
                 models=self._models,
                 current_model=self._model_name,
-                id="ai-chat",
+                id="workspace-center",
             )
         status = f" {self._model_name}"
         if self._branch:
             status += f"  ⎇ {self._branch}"
-        status += "  │  F10: term  M: menu"
+        status += "  │  Esc: чат  M: меню"
         yield Static(status, id="status-bar")
-
-    # ─── Properties ─────────────────────────────────
 
     @property
     def file_explorer(self) -> FileExplorerPanel:
         return self.query_one("#file-explorer", FileExplorerPanel)
 
     @property
-    def code_editor(self) -> CodeEditorPanel:
-        return self.query_one("#code-editor", CodeEditorPanel)
-
-    @property
-    def terminal(self) -> TerminalPanel:
-        return self.query_one("#terminal-panel", TerminalPanel)
-
-    @property
-    def version_control(self) -> VersionControlPanel:
-        return self.query_one("#version-control", VersionControlPanel)
+    def workspace(self) -> WorkspaceCenter:
+        return self.query_one("#workspace-center", WorkspaceCenter)
 
     @property
     def chat(self) -> AIChatPanel:
-        return self.query_one("#ai-chat", AIChatPanel)
+        return self.workspace.chat
+
+    @property
+    def active_agents(self) -> ActiveAgentsPanel:
+        return self.query_one("#active-agents", ActiveAgentsPanel)
 
     @property
     def status_bar(self) -> Static:
         return self.query_one("#status-bar", Static)
 
-    @property
-    def image_viewer(self) -> ImageViewerPanel:
-        return self.query_one("#image-viewer", ImageViewerPanel)
-
-    # ─── Message handlers ──────────────────────────
-
     @on(FileSelected)
     def on_file_open(self, event: FileSelected) -> None:
-        p = event.path
-        if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".ico"):
-            self.code_editor.display = False
-            self.image_viewer.display = True
-            self.image_viewer.show_image(p)
-        else:
-            self.image_viewer.display = False
-            self.code_editor.display = True
-            self.code_editor.open_file(p)
+        self.workspace.open_path(event.path)
 
     @on(AddToContext)
     def on_add_to_context(self, event: AddToContext) -> None:
         try:
             self.chat.register_context_hint(event.path)
-            self.notify(f"Контекст: {event.path.name} (агент не запущен)")
+            self.notify(f"Контекст: {event.path.name}")
         except Exception as e:
-            self.chat.add_error(f"Cannot add context: {e}")
-
-    @on(GitCommitRequested)
-    def on_git_commit(self, event: GitCommitRequested) -> None:
-        try:
-            from Agent.git_integration import get_git_manager
-            gm = get_git_manager()
-            if gm.available:
-                result = gm.auto_snapshot(event.message, event.files or None)
-                if result:
-                    self.chat.add_success(f"Committed: {result[:8]}")
-                else:
-                    self.chat.add_warning("Nothing to commit")
-            else:
-                self.chat.add_error("Git not available")
-        except Exception as e:
-            self.chat.add_error(f"Commit error: {e}")
+            self.chat.add_error(f"Контекст: {e}")
 
     @on(RunFileRequested)
     def on_run_file(self, event: RunFileRequested) -> None:
         p = event.path
         if p.suffix == ".py":
-            cmd = f"{shlex.quote(sys.executable)} {shlex.quote(str(p))}"
+            cmd = [sys.executable, str(p)]
         elif p.suffix == ".sh":
-            cmd = f"bash {shlex.quote(str(p))}"
+            cmd = ["bash", str(p)]
         elif p.suffix in (".js", ".ts"):
-            cmd = f"node {shlex.quote(str(p))}"
+            cmd = ["node", str(p)]
         else:
-            cmd = f"{shlex.quote(sys.executable)} {shlex.quote(str(p))}"
-        self.terminal.run_command(cmd)
-        self.chat.add_info(f"Running: {cmd}")
+            cmd = [sys.executable, str(p)]
+
+        def _run() -> None:
+            try:
+                r = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=180, cwd=str(Path.cwd()),
+                )
+                lines = []
+                if r.stdout:
+                    lines.append(r.stdout[:4000])
+                if r.stderr:
+                    lines.append("stderr:\n" + r.stderr[:2000])
+                if r.returncode != 0:
+                    lines.append(f"(код выхода {r.returncode})")
+                msg = "\n".join(lines) if lines else "(нет вывода)"
+                if self._bridge:
+                    self._bridge.on_info(f"▶ {' '.join(shlex.quote(x) for x in cmd)}\n{msg}")
+            except Exception as e:
+                if self._bridge:
+                    self._bridge.on_error(f"Run: {e}")
+
+        self.chat.add_info(f"Запуск: {' '.join(shlex.quote(x) for x in cmd)}")
+        threading.Thread(target=_run, daemon=True).start()
 
     @on(FileSaved)
     def on_file_saved(self, event: FileSaved) -> None:
         self.file_explorer.refresh_tree()
 
-    @on(BranchSwitched)
-    def on_branch_switched(self, event: BranchSwitched) -> None:
-        self._branch = event.branch
-        self._update_status()
-
     @on(ChatSubmitted)
     def on_chat_message(self, event: ChatSubmitted) -> None:
         text = event.text
-        self.chat.add_user_message(text)
+        paths = list(event.image_paths or [])
+        if paths:
+            block = "\n".join(f"[Image file: {p}]" for p in paths)
+            text = block + "\n\n" + text
+        self.chat.add_user_message(event.text)
         if self._on_chat_submit:
             hints = self.chat.get_context_hints()
             if hints:
@@ -308,23 +211,30 @@ class TCAApp(App):
     def on_stop_requested(self, event: StopRequested) -> None:
         if self._bridge:
             self._bridge.request_stop()
-            self.chat.add_warning("Stop requested — agent will halt after current operation")
+            self.chat.add_warning("Остановка — агент завершит текущую операцию")
 
     @on(Button.Pressed, "#app-exit-btn")
     def on_exit_click(self) -> None:
         self.exit()
 
-    # ─── Actions ────────────────────────────────────
+    @on(AgentWorkerSelected)
+    def on_agent_worker_selected(self, event: AgentWorkerSelected) -> None:
+        self.workspace.focus_chat_tab()
+        self.chat.set_view_worker(event.worker_id)
+
+    @on(AgentMainChatSelected)
+    def on_agent_main_chat(self) -> None:
+        self.workspace.focus_chat_tab()
+        self.chat.set_view_worker(None)
+
+    @on(CloseWorkspaceTab)
+    def on_close_workspace_tab(self, event: CloseWorkspaceTab) -> None:
+        self.workspace.close_tab_by_id(event.tab_id)
 
     def action_focus_chat(self) -> None:
         try:
-            self.query_one("#chat-input").focus()
-        except Exception:
-            pass
-
-    def action_focus_terminal(self) -> None:
-        try:
-            self.terminal.focus()
+            self.workspace.focus_chat_tab()
+            self.query_one("#chat-input", TextArea).focus()
         except Exception:
             pass
 
@@ -336,33 +246,43 @@ class TCAApp(App):
             pass
 
     def action_save_file(self) -> None:
-        self.code_editor.action_save_file()
+        try:
+            tabs = self.workspace._tabs()
+            aid = tabs.active
+            if not aid or aid == CHAT_TAB_ID:
+                return
+            pane = tabs.get_pane(aid)
+            editor = pane.query_one(FileEditorTabPane)
+            editor._save_to_disk()
+        except Exception:
+            pass
 
     def action_toggle_find(self) -> None:
-        self.code_editor.action_toggle_find()
+        self.notify("Поиск: откройте файл во вкладке и используйте Ctrl+F в редакторе")
 
     def action_goto_line(self) -> None:
-        self.code_editor.action_goto_line()
+        self.notify("Переход к строке из вкладки файла")
 
     def action_close_tab(self) -> None:
-        self.code_editor.action_close_tab()
-
-    def action_new_terminal(self) -> None:
-        self.terminal._add_terminal_tab()
+        self.workspace.close_active_if_not_chat()
 
     def action_run_current_file(self) -> None:
-        info = self.code_editor._get_active_file_info()
-        if info and info.get("path"):
-            p = info["path"]
-            if p.suffix == ".py":
-                cmd = f"{shlex.quote(sys.executable)} {shlex.quote(str(p))}"
-                self.terminal.run_command(cmd)
-                self.chat.add_info(f"Running: {cmd}")
+        try:
+            tabs = self.workspace._tabs()
+            aid = tabs.active
+            if not aid or aid == CHAT_TAB_ID:
+                self.notify("Откройте файл во вкладке", severity="warning")
+                return
+            pane = tabs.get_pane(aid)
+            ed = pane.query_one(FileEditorTabPane)
+            self.post_message(RunFileRequested(ed._path))
+        except Exception:
+            self.notify("Нет активного файла", severity="warning")
 
     def action_stop_agent(self) -> None:
         if self._bridge:
             self._bridge.request_stop()
-            self.chat.add_warning("Stop requested")
+            self.chat.add_warning("Остановка запрошена")
 
     def _set_width(self, widget_id: str, width: int) -> None:
         try:
@@ -378,33 +298,6 @@ class TCAApp(App):
     def action_resize_left_larger(self) -> None:
         self._left_width = min(50, self._left_width + 4)
         self._set_width("#col-left", self._left_width)
-
-    def action_resize_right_smaller(self) -> None:
-        self._right_width = max(22, self._right_width - 4)
-        self._set_width("#ai-chat", self._right_width)
-
-    def action_resize_right_larger(self) -> None:
-        self._right_width = min(60, self._right_width + 4)
-        self._set_width("#ai-chat", self._right_width)
-
-    def action_resize_bottom_toggle(self) -> None:
-        try:
-            term = self.query_one("#terminal-panel", TerminalPanel)
-            term.display = not term.display
-        except Exception:
-            pass
-
-    def action_toggle_terminal_fullscreen(self) -> None:
-        try:
-            term = self.query_one("#terminal-panel", TerminalPanel)
-            if "maximized" in term.classes:
-                term.remove_class("maximized")
-            else:
-                term.add_class("maximized")
-        except Exception:
-            pass
-
-    # ─── Public API ─────────────────────────────────
 
     def set_bridge(self, bridge) -> None:
         self._bridge = bridge
@@ -423,7 +316,7 @@ class TCAApp(App):
         if rag:
             parts.append(f"RAG: {rag}")
         parts.append(f"MODE: {self._mode_name.upper()}")
-        parts.append("F10: term  M: menu")
+        parts.append("Esc: чат  M: меню")
         self.status_bar.update(" │ ".join(parts) if parts else "")
 
     def _update_status(self) -> None:

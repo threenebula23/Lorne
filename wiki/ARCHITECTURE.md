@@ -19,9 +19,9 @@
 
 ```
                     ┌─────────────────────────────────────┐
-                    │           tca.py                   │
-                    │  (cwd, env=KEY, TCA_MODE, --classic)│
-                    └──────────────┬────────────────────┘
+                    │      tca.py  ·  python -m Terminal    │
+                    │  (cwd, env=KEY, TCA_MODE, --classic) │
+                    └──────────────┬───────────────────────┘
                                    │
               ┌────────────────────┴────────────────────┐
               │                                         │
@@ -50,7 +50,7 @@
 
 | Файл | Роль |
 |------|------|
-| **`agent.py`** | Старт TUI или classic CLI, создание `TUIBridge`, вызов графа, сессии, интеграция с чатом. |
+| **`agent.py`** | Старт TUI или classic CLI; `TUIBridge` создаётся только в TUI; общий граф и сессии. |
 | **`graph_runner.py`** | Узлы LangGraph: `call_model`, `execute_tools`, маршрутизация `should_continue`. |
 | **`tool_registry.py`** | Сборка списка инструментов: `_base_tools`, кастомные, опционально browser (agent mode). `build_tools()`, `bind_tools_safe()`. |
 | **`llm_provider.py`** | OpenRouter-клиент, профили (`fast`/`balanced`/`quality`), список моделей, ретраи. |
@@ -59,6 +59,7 @@
 | **`message_utils.py`** | Санитизация истории, компактирование, усечение результатов инструментов. |
 | **`git_integration.py`** | Обёртка над GitPython: статус, diff, автокоммиты при записи файлов (если включено). |
 | **`creator_mode.py`** | Creator Mode: разбиение задачи, пул воркеров, агрегация результатов. |
+| **`creator_summary.py`** | Один формат Markdown-итога Creator для TUI, classic и записи в `messages`. |
 | **`creator_provider.py`** | Выбор local vs heavy модели для подзадач. |
 | **`multiagent.py`** | Логические «под-агенты» (`/agent`): несколько потоков задач в одном проекте, не параллельное исполнение. |
 | **`path_utils.py`** | Разрешение путей относительно корня проекта. |
@@ -69,9 +70,9 @@
 
 | Каталог | Назначение |
 |---------|------------|
-| **`Agent/tools/`** | Реализации `@tool` для LangChain: файлы, терминал, git, web, RAG-обёртки, PDF, кастомные инструменты и т.д. См. `docs/TOOLS.md`. |
+| **`Agent/tools/`** | Реализации `@tool` для LangChain: файлы, терминал, git, web, RAG-обёртки, PDF, кастомные инструменты и т.д. См. [TOOLS.md](TOOLS.md). |
 | **`Agent/rag/`** | Индексация проекта, чанкинг, `get_rag_tool()` для `rag_search`. |
-| **`Agent/checkpoint/`** | SQLite-сессии: сообщения, восстановление диалога (`.tca_checkpoints.sqlite` и др.). |
+| **`Agent/checkpoint/`** | SQLite-сессии: сообщения, восстановление диалога (файл `.tca/checkpoints.sqlite` в проекте). |
 | **`Agent/versioning/`** | SQLite-снимки содержимого файлов до правок, откат. |
 | **`Agent/file_loading/`** | Загрузка/подготовка файлов для RAG и контекста. |
 
@@ -99,7 +100,7 @@
 | `browser_tool.py` | Playwright: `browser_*` (подмешиваются в **agent mode** через `build_tools(agent_mode=True)`) |
 | `__init__.py` | Реэкспорт публичных имён для `tool_registry` |
 
-Регистрация нового инструмента: файл → экспорт в `__init__.py` → запись в `_base_tools` в `tool_registry.py` → см. `docs/EXTENDING.md`.
+Регистрация нового инструмента: файл → экспорт в `__init__.py` → запись в `_base_tools` в `tool_registry.py` → см. [EXTENDING.md](EXTENDING.md).
 
 ---
 
@@ -107,10 +108,10 @@
 
 | Файл | Роль |
 |------|------|
-| **`tui_app.py`** | `TCAApp`: layout (explorer, редактор, терминал, git, чат), `ResizeHandle`, CSS. |
+| **`tui_app.py`** | `TCAApp`: слева дерево + панель агентов, по центру вкладки (чат + файлы), CSS в `tui_app.tcss`. |
 | **`tui_bridge.py`** | Singleton-мост: агент в фоне вызывает `call_from_thread` для обновления панелей, подтверждений, стопа. |
 | **`themes.py`** | Темы оформления, применение к приложению. |
-| **`ui_prefs.py`** | Сохранение пользовательских настроек UI (пути к `.tca/` и т.п.). |
+| **`ui_prefs.py`** | Тема, размер интерфейса (`density`), подсветка, акцент → `.tca/ui_settings.json`. |
 | **`visualization.py`** | Rich-вывод для **classic** режима: результаты инструментов, RAG. |
 | **`graph_display.py`** | Отображение прогресса Creator Mode (classic). |
 | **`splash.py`**, **`input_widget.py`**, **`path_loading.py`** | Вспомогательные виджеты/экраны. |
@@ -122,25 +123,26 @@
 
 | Файл | Панель |
 |------|--------|
-| `file_explorer.py` | Дерево файлов, открытие, контекстное меню, запуск файлов. |
-| `code_editor.py` | Вкладки, обычные файлы + **Jupyter `.ipynb`** (ячейки, run, autosave). |
-| `ai_chat.py` | Чат с агентом, выбор модели/режима, стоп. |
-| `terminal_panel.py` | Встроенный терминал (textual-terminal). |
-| `version_control.py` | Ветки, staging, commit (Git). |
+| `file_explorer.py` | Дерево файлов, вкладка настроек (тема, размер UI, ключи), контекст в чат. |
+| `active_agents_panel.py` | Дерево Creator / режимов; выбор воркера или «Общий чат». |
+| `workspace_center.py` | Вкладки: постоянный чат + вкладки редактора/просмотра. |
+| `code_editor.py` | Редактор файлов и **Jupyter `.ipynb`** (ячейки, run, autosave). |
+| `ai_chat.py` | Чат, модель, режим (Normal / Creator / …), контекст, метрики окна/сессии. |
+| `terminal_panel.py`, `version_control.py` | Модули на месте; в текущем layout IDE могут не монтироваться — см. `tui_app.py`. |
 
 Сообщения Textual (`FileSaved`, `ChatSubmitted`, …) связывают панели с `agent.py` без жёсткой связи на уровне импортов циклов — часто через `post_message` и мост.
 
 ---
 
-## 6. Каталог `Terminal/` — альтернативный CLI
+## 6. Каталог `Terminal/` — тот же вход, что у `tca.py`
 
 | Файл | Роль |
 |------|------|
-| `cli.py` | Парсинг аргументов, запуск. |
+| `cli.py` | Как `tca.py`: `env=`, каталог проекта, `TCA_MODE`, флаги `--classic` / `--tui`. |
 | `runner.py` | Кросс-платформенное выполнение shell-команд. |
 | `__main__.py` | Точка входа `python -m Terminal`. |
 
-Часто пользователь запускает **`python tca.py`** или команду **`tca`** из `install.sh`, а не `-m Terminal` напрямую.
+По умолчанию **`python -m Terminal`** запускает **TUI**; для режима только чата: `python -m Terminal --classic` или `TCA_MODE=classic`.
 
 ---
 
@@ -150,8 +152,9 @@
 |------|--------|------------|
 | `Agent/.env` | `dotenv` | `OPENROUTER_API_KEY` |
 | `~/.tca_config.json` | `llm_provider` | Выбранная модель |
-| `.tca_checkpoints.sqlite` | `checkpoint` | История сообщений сессий |
-| `.tca_versions.sqlite` | `versioning` | Снимки файлов |
+| `.tca/checkpoints.sqlite` | `checkpoint` | История сообщений сессий |
+| `.tca/versions.sqlite` | `versioning` | Снимки файлов |
+| `.tca/ui_settings.json` | `ui_prefs` | Тема, плотность UI, подсветка, акцент |
 | `.tca_plan.json` | `planning_tool` | Текущий план |
 | `~/.tca_custom_tools/*.py` | `custom_tools` | Пользовательские инструменты |
 | `.tca/` (в проекте) | UI prefs и др. | Настройки интерфейса |
@@ -184,4 +187,4 @@
 2. Прочитать **`Agent/graph_runner.py`** (узлы графа) и **`Agent/tool_registry.py`** (список tools).
 3. Для изменения поведения агента — **`system_promt.py`**, **`message_utils.py`**.
 4. Для UI — **`Interface/tui_app.py`**, **`tui_bridge.py`**, нужная панель в **`Interface/panels/`**.
-5. Для нового инструмента — **`docs/EXTENDING.md`** + тест вручную через чат.
+5. Для нового инструмента — **[EXTENDING.md](EXTENDING.md)** + тест вручную через чат.

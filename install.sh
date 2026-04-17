@@ -28,12 +28,37 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 TCA_DIR="$(cd "$(dirname "$0")" && pwd)"
+INSTALL_T0=$(date +%s)
+
+_elapsed_s() {
+    echo $(($(date +%s) - INSTALL_T0))
+}
+
+# Прогресс: [████░░░░] step/total  Ns  сообщение
+_tca_progress() {
+    local step="$1"
+    local total="$2"
+    local msg="$3"
+    local width=18
+    local filled=$((step * width / total))
+    [ "$filled" -gt "$width" ] && filled=$width
+    local empty=$((width - filled))
+    local bar_f=""
+    local bar_e=""
+    local i
+    for ((i = 0; i < filled; i++)); do bar_f+="█"; done
+    for ((i = 0; i < empty; i++)); do bar_e+="░"; done
+    printf "  [%b%s%b%s] %d/%d  %ds  %s\n" \
+        "$CYAN" "$bar_f" "$DIM" "$bar_e" "$step" "$total" "$(_elapsed_s)" "$msg"
+}
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════╗${RESET}"
 echo -e "${BOLD}║  TCA — Установка Terminal Coding Assistant   ║${RESET}"
 echo -e "${BOLD}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
+
+TOTAL_STEPS=6
 
 # ─── Python ─────────────────────────────────────────
 PYTHON=""
@@ -54,26 +79,28 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-echo -e "  ${GREEN}✓${RESET} Python: $($PYTHON --version)"
+_tca_progress 1 "$TOTAL_STEPS" "Проверка Python: $($PYTHON --version 2>&1)"
 
 # ─── Virtual environment ────────────────────────────
 VENV_DIR="$TCA_DIR/.venv"
 
 if [ ! -d "$VENV_DIR" ]; then
-    echo -e "  ${CYAN}⏳${RESET} Создаю виртуальное окружение..."
+    _tca_progress 2 "$TOTAL_STEPS" "Создание виртуального окружения…"
     $PYTHON -m venv "$VENV_DIR"
-    echo -e "  ${GREEN}✓${RESET} Виртуальное окружение создано: $VENV_DIR"
 else
-    echo -e "  ${GREEN}✓${RESET} Виртуальное окружение найдено: $VENV_DIR"
+    _tca_progress 2 "$TOTAL_STEPS" "Виртуальное окружение уже есть"
 fi
 
 # Activate venv
 source "$VENV_DIR/bin/activate"
 
 # ─── Dependencies ───────────────────────────────────
-echo -e "  ${CYAN}⏳${RESET} Устанавливаю зависимости..."
+_tca_progress 3 "$TOTAL_STEPS" "Обновление pip…"
 pip install --quiet --upgrade pip
-pip install --quiet -r "$TCA_DIR/requirements.txt"
+
+_tca_progress 4 "$TOTAL_STEPS" "Установка зависимостей (requirements.txt)…"
+echo -e "  ${DIM}(ниже — прогресс pip: загрузка и установка пакетов)${RESET}"
+pip install -r "$TCA_DIR/requirements.txt"
 echo -e "  ${GREEN}✓${RESET} Зависимости установлены"
 
 # ─── .env check ─────────────────────────────────────
@@ -90,6 +117,8 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 # ─── Create `tca` command ───────────────────────────
+_tca_progress 5 "$TOTAL_STEPS" "Создание команды tca и ссылка в PATH…"
+
 TCA_BIN="$VENV_DIR/bin/tca"
 cat > "$TCA_BIN" << SCRIPT
 #!/bin/bash
@@ -98,10 +127,7 @@ exec "$VENV_DIR/bin/python" "$TCA_DIR/tca.py" "\$@"
 SCRIPT
 chmod +x "$TCA_BIN"
 
-# ─── Symlink to PATH ───────────────────────────────
 INSTALL_DIR=""
-
-# Try common user bin locations
 for dir in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
     if [ -d "$dir" ]; then
         INSTALL_DIR="$dir"
@@ -116,13 +142,11 @@ fi
 
 SYMLINK="$INSTALL_DIR/tca"
 
-# Remove old symlink if exists
 if [ -L "$SYMLINK" ] || [ -f "$SYMLINK" ]; then
     rm -f "$SYMLINK"
 fi
 
 ln -s "$TCA_BIN" "$SYMLINK" 2>/dev/null || {
-    # If symlink fails (e.g. /usr/local/bin needs sudo), copy instead
     cp "$TCA_BIN" "$SYMLINK" 2>/dev/null || {
         echo -e "  ${YELLOW}⚠ Не удалось создать команду в $INSTALL_DIR${RESET}"
         echo -e "  ${DIM}Добавьте вручную: export PATH=\"$VENV_DIR/bin:\$PATH\"${RESET}"
@@ -131,10 +155,15 @@ ln -s "$TCA_BIN" "$SYMLINK" 2>/dev/null || {
 }
 
 # ─── Done ───────────────────────────────────────────
+_tca_progress "$TOTAL_STEPS" "$TOTAL_STEPS" "Готово"
+
+ELAPSED=$(_elapsed_s)
 echo ""
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════╗${RESET}"
 echo -e "${BOLD}${GREEN}║  ✓ TCA установлен успешно!                  ║${RESET}"
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════╝${RESET}"
+echo ""
+echo -e "  ${DIM}Время установки: ${BOLD}${ELAPSED}${RESET}${DIM} с${RESET}"
 echo ""
 
 if [ -n "$SYMLINK" ]; then
@@ -146,7 +175,6 @@ if [ -n "$SYMLINK" ]; then
     echo -e "    ${BOLD}tca env=sk-or-v1-...${RESET}         — запуск с API ключом"
     echo ""
 
-    # Check if INSTALL_DIR is in PATH
     case ":$PATH:" in
         *":$INSTALL_DIR:"*) ;;
         *)

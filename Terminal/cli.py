@@ -1,11 +1,13 @@
 """
-Точка входа: запуск агента в терминале.
+Точка входа: тот же выбор режима, что и у `tca.py` (TUI по умолчанию, classic по флагу).
 
 Использование:
-    python -m Terminal                       — запуск в текущей директории
-    python -m Terminal /path/to/project      — запуск в указанном проекте
-    python -m Terminal env=<API_KEY>         — запуск с API ключом OpenRouter
-    python -m Terminal /path env=<KEY>       — оба варианта
+    python -m Terminal                       — TUI в текущей директории (как `tca`)
+    python -m Terminal /path/to/project      — проект
+    python -m Terminal env=<API_KEY>         — ключ OpenRouter (сохраняется в Agent/.env)
+    python -m Terminal /path env=<KEY>       — оба аргумента
+    python -m Terminal --classic             — только чат в терминале (Rich)
+    python -m Terminal --tui                 — явно TUI
 """
 import os
 import sys
@@ -25,10 +27,13 @@ for _arg in sys.argv[1:]:
         _filtered_argv.append(_arg)
 sys.argv = _filtered_argv
 
+_env_agent = _PROJECT_ROOT / "Agent" / ".env"
 if _env_key:
     os.environ["OPENROUTER_API_KEY"] = _env_key
+    _env_agent.parent.mkdir(parents=True, exist_ok=True)
+    _env_agent.write_text(f"OPENROUTER_API_KEY={_env_key}\n", encoding="utf-8")
+    print("\n  Ключ сохранён в Agent/.env — в следующий раз достаточно: python -m Terminal\n")
 
-_env_agent = _PROJECT_ROOT / "Agent" / ".env"
 _env_root = _PROJECT_ROOT / ".env"
 if _env_agent.exists():
     from dotenv import load_dotenv
@@ -38,7 +43,7 @@ elif _env_root.exists():
     load_dotenv(_env_root)
 
 
-def main():
+def main() -> None:
     if not os.environ.get("OPENROUTER_API_KEY"):
         print("\n  \033[31m✗ OPENROUTER_API_KEY не найден!\033[0m\n")
         print("  Укажите ключ одним из способов:\n")
@@ -58,8 +63,21 @@ def main():
             print(f"Директория не найдена: {target}")
             sys.exit(1)
 
-    from Agent.agent import run_coding_agent_loop
-    run_coding_agent_loop()
+    mode = os.getenv("TCA_MODE", "tui").lower()
+
+    if "--classic" in sys.argv:
+        sys.argv.remove("--classic")
+        mode = "classic"
+    if "--tui" in sys.argv:
+        sys.argv.remove("--tui")
+        mode = "tui"
+
+    if mode == "classic":
+        from Agent.agent import run_coding_agent_loop
+        run_coding_agent_loop()
+    else:
+        from Agent.agent import run_tui_mode
+        run_tui_mode()
 
 
 if __name__ == "__main__":
