@@ -145,6 +145,7 @@ _CONTENT_FIELD_MAP = {
     "write_file": ("content", {"path"}),
     "create_code_file": ("code", {"filepath", "language"}),
     "append_code_snippet": ("snippet", {"filepath", "language"}),
+    "docx_write_tool": ("data_json", {"file_path", "action"}),
 }
 
 
@@ -198,19 +199,32 @@ TOOL_RESULT_LIMITS: Dict[str, int] = {
     "web_search": 9000,
     "web_fetch": 14_000,
     "web_search_and_read": 14_000,
+    "ocr_tool": 9000,
     "ocr_read_file_soft": 7000,
     "ocr_read_image_medium": 7000,
     "ocr_read_photo_strong": 9000,
     "office_document_read": 10_000,
+    "docx_write_tool": 4000,
     "docx_document_create": 4000,
     "docx_document_append_paragraphs": 4000,
     "docx_document_patch_paragraphs": 4000,
+    "docxedit_tool": 4000,
+    "docx_document_advanced_ops": 6000,
     "pdf_styled_document_create": 4000,
+    "plan_tool": 4000,
+    "git_ops": 5000,
+    "library_context": 12_000,
+    "reasoning_tool": 6000,
+    "code_file_tool": 4000,
+    "headless_browser": 8000,
+    "playwright_sync": 8000,
+    "file_versions_tool": 4000,
 }
 DEFAULT_RESULT_LIMIT = 3000
 
 _WEB_COMPACT_TOOLS = frozenset({"web_search", "web_fetch", "web_search_and_read"})
 _OCR_COMPACT_TOOLS = frozenset({
+    "ocr_tool",
     "ocr_read_file_soft", "ocr_read_image_medium", "ocr_read_photo_strong",
 })
 _OFFICE_COMPACT_TOOLS = frozenset({"office_document_read"})

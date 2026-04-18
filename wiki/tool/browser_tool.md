@@ -1,5 +1,7 @@
 # Документация инструмента: browser_tool.py (Автоматизация браузера)
 
+> **Для вызова у модели (режим Agent):** Node Playwright обёрнут в **`headless_browser`**; опционально добавляется **`playwright_sync`** (Python), если в Settings включён Python Playwright. Соответствие `action` ↔ старые имена — в [COMPACT_TOOLS.md](../COMPACT_TOOLS.md). Ниже — реализация в `browser_tool.py` / `playwright_sync_tool.py`.
+
 Этот инструмент позволяет агенту не просто искать текст, но и "видеть" сайты почти так же, как человек — загружать их с выполнением JavaScript, кликать по кнопкам и делать скриншоты.
 
 ## Для всех: Что это делает?

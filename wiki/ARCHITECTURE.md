@@ -52,15 +52,16 @@
 |------|------|
 | **`agent.py`** | Старт TUI или classic CLI; `TUIBridge` создаётся только в TUI; общий граф и сессии. |
 | **`graph_runner.py`** | Узлы LangGraph: `call_model`, `execute_tools`, маршрутизация `should_continue`. |
-| **`tool_registry.py`** | Сборка списка инструментов: `_base_tools`, кастомные, опционально browser (agent mode). `build_tools()`, `bind_tools_safe()`. |
+| **`tool_registry.py`** | Сборка списка: `_base_tools` (в т.ч. мульти-тулы из `compact_tools.py`), кастомные, `build_tools(agent_mode, playwright_python)`, `set_tool_session_prefs`, `bind_tools_safe()`. |
 | **`llm_provider.py`** | OpenRouter-клиент, профили (`fast`/`balanced`/`quality`), список моделей, ретраи. |
 | **`command_router.py`** | Slash-команды (`/model`, `/plan`, …) в classic-режиме. |
 | **`planner.py`** | Построение плана задачи через LLM, запись в `.tca_plan.json`. |
 | **`message_utils.py`** | Санитизация истории, компактирование, усечение результатов инструментов. |
 | **`git_integration.py`** | Обёртка над GitPython: статус, diff, автокоммиты при записи файлов (если включено). |
-| **`creator_mode.py`** | Creator Mode: разбиение задачи, пул воркеров, агрегация результатов. |
+| **`creator_mode.py`** | Creator Mode: воркеры, оркестрация (`sequential` / `parallel` / `supervisor` / `hierarchical`), сводка супервайзера. |
 | **`creator_summary.py`** | Один формат Markdown-итога Creator для TUI, classic и записи в `messages`. |
-| **`creator_provider.py`** | Выбор local vs heavy модели для подзадач. |
+| **`creator_provider.py`** | Конфиг Creator (`orchestration`, local/heavy, `max_workers`). |
+| **`creator_orchestration.py`** | Роли воркеров, handoff, `synthesize_supervisor_report`. |
 | **`multiagent.py`** | Логические «под-агенты» (`/agent`): несколько потоков задач в одном проекте, не параллельное исполнение. |
 | **`path_utils.py`** | Разрешение путей относительно корня проекта. |
 | **`spinner.py`** | Индикация ожидания LLM. |
@@ -86,21 +87,25 @@
 |------|------------|
 | `file_ops.py` | `read_file`, `list_files`, `edit_file`, `search_in_files`, `write_file`, `get_file_line_count` |
 | `terminal_tool.py` | `run_command` |
-| `code_gen.py` | `create_code_file`, `append_code_snippet` |
-| `planning_tool.py` | `save_plan`, `load_plan`, `update_plan`, `clear_plan` |
-| `versioning_tool.py` | `list_file_versions`, `rollback_file` |
-| `git_tool.py` | `git_log`, `git_diff`, `git_rollback_file`, `git_status` |
-| `web_tool.py` | `web_search`, `web_fetch`, `web_search_and_read` |
+| `code_gen.py` | `create_code_file`, `append_code_snippet` (у модели — **`code_file_tool`**) |
+| `planning_tool.py` | `save_plan`, … (у модели — **`plan_tool`**) |
+| `compact_tools.py` | Диспетчеры: `plan_tool`, `docx_write_tool`, `docxedit_tool`, `ocr_tool`, `code_file_tool`, `git_ops`, `library_context`, `reasoning_tool`, `headless_browser`, `playwright_sync`, `file_versions_tool` |
+| `versioning_tool.py` | `list_file_versions`, `rollback_file` (у модели — **`file_versions_tool`**) |
+| `git_tool.py` | Низкоуровневые git-тулы (у модели — **`git_ops`**) |
+| `web_tool.py` | `web_search`, `web_fetch` (`web_search_and_read` в реестр **не** входит) |
 | `code_interpreter.py` | Запуск Python в subprocess |
-| `context7_tool.py` | Документация библиотек (`get_documentation`, …) |
+| `context7_tool.py` | `resolve_library`, `get_library_docs`, `get_documentation` (у модели — **`library_context`**, включая `action=search`) |
+| `office_document_tool.py` | Чтение/запись docx, `docx_document_advanced_ops`, PDF ReportLab |
+| `docxedit_tools.py` | Правки docx с сохранением формата (у модели — **`docxedit_tool`**) |
 | `pdf_tool.py` | `create_pdf` |
 | `interactive.py` | `ask_user` |
 | `custom_tools.py` | Загрузка пользовательских инструментов из `~/.tca_custom_tools` |
-| `thinking_tool.py` | `think`, `show_diff`, `analyze_code` |
-| `browser_tool.py` | Playwright: `browser_*` (подмешиваются в **agent mode** через `build_tools(agent_mode=True)`) |
-| `__init__.py` | Реэкспорт публичных имён для `tool_registry` |
+| `thinking_tool.py` | `think`, `show_diff`, `analyze_code` (у модели — **`reasoning_tool`**) |
+| `browser_tool.py` | Node-скрипты Playwright (у модели в Agent — **`headless_browser`**) |
+| `playwright_sync_tool.py` | Python Playwright (у модели — **`playwright_sync`**, только при флаге в UI) |
+| `__init__.py` | Реэкспорт публичных имён для импортов и скриптов |
 
-Регистрация нового инструмента: файл → экспорт в `__init__.py` → запись в `_base_tools` в `tool_registry.py` → см. [EXTENDING.md](EXTENDING.md).
+Регистрация: см. [EXTENDING.md](EXTENDING.md) и [COMPACT_TOOLS.md](COMPACT_TOOLS.md) — новый низкоуровневый `@tool` или ветка в `compact_tools.py` + `_base_tools` в `tool_registry.py`.
 
 ---
 
@@ -111,7 +116,7 @@
 | **`tui_app.py`** | `TCAApp`: слева дерево + панель агентов, по центру вкладки (чат + файлы), CSS в `tui_app.tcss`. |
 | **`tui_bridge.py`** | Singleton-мост: агент в фоне вызывает `call_from_thread` для обновления панелей, подтверждений, стопа. |
 | **`themes.py`** | Темы оформления, применение к приложению. |
-| **`ui_prefs.py`** | Тема, размер интерфейса (`density`), подсветка, акцент → `.tca/ui_settings.json`. |
+| **`ui_prefs.py`** | Тема, `density`, подсветка, акцент, **`playwright_python_enabled`** → `.tca/ui_settings.json`. |
 | **`visualization.py`** | Rich-вывод для **classic** режима: результаты инструментов, RAG. |
 | **`graph_display.py`** | Отображение прогресса Creator Mode (classic). |
 | **`splash.py`**, **`input_widget.py`**, **`path_loading.py`** | Вспомогательные виджеты/экраны. |
@@ -155,7 +160,7 @@
 | `.tca/checkpoints.sqlite` | `checkpoint` | История сообщений сессий |
 | `.tca/versions.sqlite` | `versioning` | Снимки файлов |
 | `.tca/ui_settings.json` | `ui_prefs` | Тема, плотность UI, подсветка, акцент |
-| `.tca_plan.json` | `planning_tool` | Текущий план |
+| `.tca/plan.json` | `planning_tool` | Текущий план |
 | `~/.tca_custom_tools/*.py` | `custom_tools` | Пользовательские инструменты |
 | `.tca/` (в проекте) | UI prefs и др. | Настройки интерфейса |
 
@@ -178,6 +183,7 @@
 | [README.md](../README.md) | Установка, команды пользователя, обзор |
 | [EXTENDING.md](EXTENDING.md) | Новые инструменты, модели, Creator |
 | [TOOLS.md](TOOLS.md) | Справочник инструментов агента |
+| [COMPACT_TOOLS.md](COMPACT_TOOLS.md) | Мульти-тулы и режим Agent / Playwright |
 
 ---
 

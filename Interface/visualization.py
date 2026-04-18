@@ -214,8 +214,13 @@ def display_tool_result(step_num: int, name: str, result: Any) -> None:
         bridge.on_tool_result(name, result)
         return
 
-    if name in ("save_plan", "update_plan", "load_plan", "clear_plan"):
-        _display_plan_result(name, result)
+    if name in ("save_plan", "update_plan", "load_plan", "clear_plan", "plan_tool"):
+        if name == "plan_tool" and isinstance(result, dict):
+            inner = str(result.get("_plan_action") or "load_plan")
+            sub = {k: v for k, v in result.items() if k != "_plan_action"}
+            _display_plan_result(inner, sub)
+        else:
+            _display_plan_result(name, result)
         return
 
     if name == "read_file" and isinstance(result, dict):
@@ -226,7 +231,7 @@ def display_tool_result(step_num: int, name: str, result: Any) -> None:
         _display_command_result(result)
         return
 
-    if name in ("edit_file", "write_file", "create_code_file", "append_code_snippet"):
+    if name in ("edit_file", "write_file", "create_code_file", "append_code_snippet", "code_file_tool"):
         _display_file_change_result(name, result)
         return
 

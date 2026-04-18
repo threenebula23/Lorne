@@ -22,12 +22,26 @@ try:
         get_local_llm, get_heavy_llm, classify_task_complexity,
         route_to_model, get_creator_config, check_local_server,
     )
+    from .creator_orchestration import (
+        normalize_orchestration,
+        worker_roles_for_count,
+        format_worker_mode_section,
+        build_worker_user_content,
+        synthesize_supervisor_report,
+    )
     from .planner import build_plan
     from .system_promt import SYSTEM_PROMPT
 except ImportError:
     from Agent.creator_provider import (
         get_local_llm, get_heavy_llm, classify_task_complexity,
         route_to_model, get_creator_config, check_local_server,
+    )
+    from Agent.creator_orchestration import (
+        normalize_orchestration,
+        worker_roles_for_count,
+        format_worker_mode_section,
+        build_worker_user_content,
+        synthesize_supervisor_report,
     )
     from Agent.planner import build_plan
     from Agent.system_promt import SYSTEM_PROMPT
@@ -154,6 +168,9 @@ def _run_single_worker(
     display: Optional[Any] = None,
     project_context: str = "",
     depth: int = 0,
+    role: str = "implementer",
+    peer_memo: str = "",
+    orchestration: str = "parallel",
 ) -> Dict[str, Any]:
     """Запустить одного воркера-агента.
 
@@ -175,17 +192,11 @@ def _run_single_worker(
             model_type=model_type,
         )
 
-    # Системный промпт для воркера
-    worker_system = f"""{SYSTEM_PROMPT}
-
-{project_context}
-
-=== РЕЖИМ ВОРКЕРА ===
-Ты — воркер #{worker_id} в Creator Mode.
-Выполни ОДНУ конкретную подзадачу. Работай эффективно и лаконично.
-НЕ задавай вопросов — просто делай.
-После завершения дай краткий отчёт что было сделано.
-"""
+    orch = normalize_orchestration(orchestration)
+    worker_system = (
+        f"{SYSTEM_PROMPT}\n\n{project_context}\n\n"
+        + format_worker_mode_section(worker_id, role, orch)
+    )
 
     # Build spawn_sub_creator tool for recursive delegation
     sub_results: List[Dict[str, Any]] = []
@@ -219,7 +230,7 @@ def _run_single_worker(
 
     messages = [
         SystemMessage(content=worker_system),
-        HumanMessage(content=f"Подзадача: {task}\n\nВыполни эту задачу."),
+        HumanMessage(content=build_worker_user_content(task, peer_memo)),
     ]
 
     current_llm = llm
@@ -334,9 +345,9 @@ def _run_single_worker(
                 # Перезапустить с heavy
                 messages_retry = [
                     SystemMessage(content=worker_system),
-                    HumanMessage(content=f"Подзадача: {task}\n\nВыполни эту задачу."),
+                    HumanMessage(content=build_worker_user_content(task, peer_memo)),
                 ]
-                graph_retry = _build_worker_graph(heavy_llm, tools, heavy_name)
+                graph_retry = _build_worker_graph(heavy_llm, worker_tools, heavy_name)
                 for state in graph_retry.stream({"messages": messages_retry}, stream_mode="values"):
                     messages_retry = state["messages"]
                     
@@ -600,7 +611,13 @@ def run_creator_mode(
     heavy_count = sum(1 for wc in worker_configs if wc["model_type"] == "heavy")
     print_info(f"Маршрутизация: {local_count} local, {heavy_count} heavy")
 
-    # === Фаза 4: Запуск параллельных агентов ===
+    orchestration = normalize_orchestration(str(config.get("orchestration", "parallel")))
+    roles = worker_roles_for_count(len(worker_configs), orchestration)
+    for idx, wc in enumerate(worker_configs):
+        wc["role"] = roles[idx] if idx < len(roles) else "implementer"
+    print_info(f"Оркестрация Creator: {orchestration}")
+
+    # === Фаза 4: Запуск агентов (параллель / конвейер) ===
     if display:
         for wc in worker_configs:
             w_info = WorkerInfo(
@@ -626,33 +643,29 @@ def run_creator_mode(
         bridge = None
 
     try:
-        effective_workers = min(max_workers, len(worker_configs))
-        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
-            futures: Dict[Future, str] = {}
+        if orchestration == "sequential":
+            handoff = ""
             for wc in worker_configs:
-                future = executor.submit(
-                    _run_single_worker,
-                    worker_id=wc["worker_id"],
-                    task=wc["task"],
-                    tools=tools,
-                    model_type=wc["model_type"],
-                    llm=wc["llm"],
-                    model_name=wc["model_name"],
-                    display=display,
-                    project_context=project_context,
-                    depth=depth,
-                )
-                futures[future] = wc["worker_id"]
-
-            for future in as_completed(futures):
-                worker_id = futures[future]
                 try:
-                    result = future.result(timeout=300)
-                    results.append(result)
+                    r = _run_single_worker(
+                        worker_id=wc["worker_id"],
+                        task=wc["task"],
+                        tools=tools,
+                        model_type=wc["model_type"],
+                        llm=wc["llm"],
+                        model_name=wc["model_name"],
+                        display=display,
+                        project_context=project_context,
+                        depth=depth,
+                        role=wc.get("role", "implementer"),
+                        peer_memo=handoff,
+                        orchestration=orchestration,
+                    )
+                    results.append(r)
                 except Exception as e:
                     results.append({
-                        "worker_id": worker_id,
-                        "task": "",
+                        "worker_id": wc["worker_id"],
+                        "task": wc.get("task", ""),
                         "status": "error",
                         "result": str(e),
                         "tool_calls": 0,
@@ -660,9 +673,57 @@ def run_creator_mode(
                         "elapsed": 0,
                     })
                     if display:
-                        display.update_worker(worker_id, status="error", result_preview=str(e)[:80])
+                        display.update_worker(wc["worker_id"], status="error", result_preview=str(e)[:80])
+                snippet = (results[-1].get("result") or "").strip()
+                if len(snippet) > 8000:
+                    snippet = snippet[:4000] + "\n…\n" + snippet[-3000:]
+                handoff += (
+                    f"\n### {results[-1].get('worker_id', '?')} "
+                    f"({results[-1].get('status', '?')})\n{snippet}\n"
+                )
                 if bridge:
                     _push_full_tree(bridge, task, worker_configs, results)
+        else:
+            effective_workers = min(max_workers, len(worker_configs))
+            with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                futures: Dict[Future, str] = {}
+                for wc in worker_configs:
+                    future = executor.submit(
+                        _run_single_worker,
+                        worker_id=wc["worker_id"],
+                        task=wc["task"],
+                        tools=tools,
+                        model_type=wc["model_type"],
+                        llm=wc["llm"],
+                        model_name=wc["model_name"],
+                        display=display,
+                        project_context=project_context,
+                        depth=depth,
+                        role=wc.get("role", "implementer"),
+                        peer_memo="",
+                        orchestration=orchestration,
+                    )
+                    futures[future] = wc["worker_id"]
+
+                for future in as_completed(futures):
+                    worker_id = futures[future]
+                    try:
+                        result = future.result(timeout=300)
+                        results.append(result)
+                    except Exception as e:
+                        results.append({
+                            "worker_id": worker_id,
+                            "task": "",
+                            "status": "error",
+                            "result": str(e),
+                            "tool_calls": 0,
+                            "rounds": 0,
+                            "elapsed": 0,
+                        })
+                        if display:
+                            display.update_worker(worker_id, status="error", result_preview=str(e)[:80])
+                    if bridge:
+                        _push_full_tree(bridge, task, worker_configs, results)
 
     except KeyboardInterrupt:
         print_warning("Creator Mode прерван пользователем")
@@ -680,6 +741,18 @@ def run_creator_mode(
 
     # Сортировать результаты по worker_id
     results.sort(key=lambda r: r.get("worker_id", ""))
+
+    supervisor_synthesis = ""
+    if orchestration == "supervisor" and results:
+        try:
+            sup_llm, _sup_name = get_heavy_llm()
+            supervisor_synthesis = synthesize_supervisor_report(task, results, sup_llm)
+            if supervisor_synthesis:
+                preview = supervisor_synthesis[:2000] + ("…" if len(supervisor_synthesis) > 2000 else "")
+                print_info(f"\n── Сводка супервайзера ──\n{preview}")
+        except Exception as e:
+            supervisor_synthesis = f"[supervisor error] {e}"
+            print_warning(supervisor_synthesis)
 
     # === Фаза 5: Итоговый отчёт ===
     if display_creator_result and display:
@@ -719,4 +792,6 @@ def run_creator_mode(
         "workers_error": error_count,
         "elapsed": elapsed,
         "results": results,
+        "orchestration": orchestration,
+        "supervisor_synthesis": supervisor_synthesis or None,
     }

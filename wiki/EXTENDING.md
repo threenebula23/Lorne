@@ -48,7 +48,7 @@ from .my_tool import my_awesome_tool
 
 ### 3. Регистрация в `tool_registry.py`
 
-В список `_base_tools` в `Agent/tool_registry.py`:
+В список `_base_tools` в `Agent/tool_registry.py` (или ветка `action` в **`Agent/tools/compact_tools.py`**, если логика близка к уже существующему мульти-тулу — см. [COMPACT_TOOLS.md](COMPACT_TOOLS.md)):
 
 ```python
 _base_tools: List[Any] = [
@@ -131,8 +131,9 @@ tca
 2. **Маршрутизация** — подзадача помечается как `simple` или `complex`.
    - Простые → локальная модель (быстро).
    - Сложные → тяжёлая модель (OpenRouter).
-3. **Выполнение** — параллельно через `ThreadPoolExecutor`.
-4. **Интерфейс** — в TUI: дерево агентов и лог воркера в чате; в classic: Rich-панель ответа и список изменённых файлов. Итог в сессии — общий текст из `Agent/creator_summary.py` (`format_creator_summary_text`).
+3. **Оркестрация** — см. параметр `orchestration`: при `supervisor` к ответу добавляется **`supervisor_synthesis`** (см. `creator_orchestration.py`, `creator_summary.py`).
+4. **Выполнение** — по умолчанию параллельно (`ThreadPoolExecutor`); при `sequential` — воркеры по очереди с накоплением handoff.
+5. **Интерфейс** — в TUI: дерево агентов и лог воркера в чате; в classic: Rich-панель ответа и список изменённых файлов. Итог в сессии — `format_creator_summary_text` (`creator_summary.py`).
 
 ### Параметры
 
@@ -141,6 +142,9 @@ tca
 | `local_base_url` | URL OpenAI-совместимого API | `http://{ipv4 вашего локального сервера}:3000/api` |
 | `local_model` | Имя модели на сервере | `qwen3.5:27b` |
 | `max_workers` | Макс. параллельных агентов | `4` |
+| **`orchestration`** | `parallel` — воркеры параллельно; `sequential` — цепочка с передачей контекста; `supervisor` — после воркеров сводка heavy-моделью; `hierarchical` — параллельно с разными ролями | `parallel` |
+
+Команда: `/creator set orchestration parallel` (или `sequential` / `supervisor` / `hierarchical`). Конфиг хранится в `~/.tca_config.json` → секция `creator`.
 
 ## Схема classic-режима (обзор)
 
@@ -152,7 +156,7 @@ CommandRouter ──── slash-команды ──── прямой отв
     │
     │ (обычный ввод)
     ▼
-Planner ──── build_plan() ──── save_plan()
+Planner ──── build_plan() ──── plan_tool
     │
     ▼
 AgentGraph.stream()
@@ -166,3 +170,5 @@ AgentGraph.stream()
     │
     └── should_continue → END, если нет tool_calls
 ```
+
+План по-прежнему лежит в **`.tca/plan.json`**; `plan_tool` в `compact_tools.py` делегирует в `planning_tool` (`save_plan`, `load_plan`, …).

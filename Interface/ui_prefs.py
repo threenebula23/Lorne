@@ -10,6 +10,8 @@ DEFAULT_PREFS: Dict[str, Any] = {
     "density": "normal",
     "syntax_theme": "monokai",
     "accent_color": "#8B5CF6",
+    # В режиме Agent: подключать Python Playwright (Chromium), если True — см. Settings.
+    "playwright_python_enabled": False,
 }
 
 

@@ -30,11 +30,15 @@ def get_creator_config() -> Dict[str, Any]:
     """Загрузить конфигурацию creator mode."""
     cfg = load_config()
     creator = cfg.get("creator", {})
+    orch = str(creator.get("orchestration", "parallel") or "parallel").lower().strip()
+    if orch not in ("parallel", "sequential", "supervisor", "hierarchical"):
+        orch = "parallel"
     return {
         "local_base_url": creator.get("local_base_url", _env("OPENAI_API_BASE", DEFAULT_LOCAL_BASE_URL)),
         "local_model": creator.get("local_model", DEFAULT_LOCAL_MODEL),
         "max_workers": creator.get("max_workers", DEFAULT_MAX_WORKERS),
         "enabled": creator.get("enabled", False),
+        "orchestration": orch,
     }
 
 

@@ -37,7 +37,7 @@ except ImportError:
     HAS_RICH = False
 
 from .tool_registry import (
-    list_files, save_plan, load_plan, update_plan, clear_plan,
+    list_files, save_plan, load_plan, update_plan, clear_plan, plan_tool,
     list_custom_tools, add_custom_tool, remove_custom_tool,
     reload_tools, get_custom_tools_prompt,
 )
@@ -188,9 +188,9 @@ class CommandRouter:
 
     def _handle_plan(self) -> bool:
         try:
-            result = load_plan.invoke({})
+            result = plan_tool.invoke({"action": "load"})
             from Interface.visualization import display_tool_result as _dtr
-            _dtr(0, "load_plan", result)
+            _dtr(0, "plan_tool", result)
         except Exception as e:
             print_error(f"/plan: {e}")
         return True
@@ -655,6 +655,8 @@ class CommandRouter:
                     f"  [dim]Сервер:[/dim]           [bold]{creator_cfg['local_base_url']}[/bold]\n"
                     f"  [dim]Статус:[/dim]           {status_str}\n"
                     f"  [dim]Макс. воркеров:[/dim]   [bold]{creator_cfg['max_workers']}[/bold]\n"
+                    f"  [dim]Оркестрация:[/dim]     [bold]{creator_cfg.get('orchestration', 'parallel')}[/bold]\n"
+                    f"  [dim]parallel|sequential|supervisor|hierarchical[/dim]\n"
                     f"  [dim]Активен:[/dim]          [bold]{'Да' if creator_cfg['enabled'] or self.ctx['creator_mode_active'][0] else 'Нет'}[/bold]"
                 )
                 console.print(CPanel(
@@ -676,10 +678,16 @@ class CommandRouter:
                 return True
             param = set_parts[1].strip().lower()
             value = set_parts[2].strip()
-            valid_params = {"local_model", "local_base_url", "max_workers"}
+            valid_params = {"local_model", "local_base_url", "max_workers", "orchestration"}
             if param not in valid_params:
-                print_warning(f"Неизвестный параметр: {param}. Допустимые: {', '.join(valid_params)}")
+                print_warning(f"Неизвестный параметр: {param}. Допустимые: {', '.join(sorted(valid_params))}")
                 return True
+            if param == "orchestration":
+                v = value.lower().strip()
+                if v not in ("parallel", "sequential", "supervisor", "hierarchical"):
+                    print_error("orchestration: parallel | sequential | supervisor | hierarchical")
+                    return True
+                value = v
             if param == "max_workers":
                 try:
                     value = int(value)

@@ -16,7 +16,15 @@ try:
         docx_document_create,
         docx_document_append_paragraphs,
         docx_document_patch_paragraphs,
+        docx_document_advanced_ops,
         pdf_styled_document_create,
+    )
+    from .docxedit_tools import (
+        docxedit_replace_keep_format,
+        docxedit_replace_up_to_paragraph,
+        docxedit_find_line,
+        docxedit_table_cell_append,
+        docxedit_table_font_size,
     )
     from .code_interpreter import code_interpreter
     from .context7_tool import get_documentation
@@ -43,7 +51,15 @@ except ImportError:
         docx_document_create,
         docx_document_append_paragraphs,
         docx_document_patch_paragraphs,
+        docx_document_advanced_ops,
         pdf_styled_document_create,
+    )
+    from Agent.tools.docxedit_tools import (
+        docxedit_replace_keep_format,
+        docxedit_replace_up_to_paragraph,
+        docxedit_find_line,
+        docxedit_table_cell_append,
+        docxedit_table_font_size,
     )
     from Agent.tools.code_interpreter import code_interpreter
     from Agent.tools.context7_tool import get_documentation
@@ -64,6 +80,12 @@ __all__ = [
     "ocr_read_file_soft", "ocr_read_image_medium", "ocr_read_photo_strong",
     "office_document_read",
     "docx_document_create", "docx_document_append_paragraphs", "docx_document_patch_paragraphs",
+    "docx_document_advanced_ops",
+    "docxedit_replace_keep_format",
+    "docxedit_replace_up_to_paragraph",
+    "docxedit_find_line",
+    "docxedit_table_cell_append",
+    "docxedit_table_font_size",
     "pdf_styled_document_create",
     "code_interpreter", "get_documentation",
     "browser_get_text", "browser_screenshot", "browser_click_and_get", "browser_evaluate",

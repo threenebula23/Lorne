@@ -167,17 +167,20 @@ class AgentGraph:
 
     _READ_ONLY_TOOLS = frozenset({
         "read_file", "list_files", "search_in_files", "rag_search",
-        "get_file_line_count", "load_plan", "git_log", "git_diff", "git_status",
-        "web_search", "web_fetch", "web_search_and_read",
-        "ocr_read_file_soft", "ocr_read_image_medium", "ocr_read_photo_strong",
+        "get_file_line_count", "load_plan",
+        "web_search", "web_fetch",
+        "ocr_tool",
         "office_document_read",
+        "library_context",
+        "reasoning_tool",
     })
 
     _FILE_TOOLS = frozenset({
-        "read_file", "edit_file", "write_file", "create_code_file",
-        "append_code_snippet", "replace_file_lines", "insert_file_lines",
-        "docx_document_create", "docx_document_append_paragraphs", "docx_document_patch_paragraphs",
+        "read_file", "edit_file", "write_file", "code_file_tool",
+        "replace_file_lines", "insert_file_lines",
+        "docx_write_tool", "docxedit_tool", "docx_document_advanced_ops",
         "pdf_styled_document_create",
+        "file_versions_tool",
     })
 
     def _run_single_tool(self, idx: int, tc_norm: dict) -> ToolMessage:

@@ -34,3 +34,7 @@ pytesseract>=0.3.10
 pymupdf>=1.23.0
 # Word .docx read/write with styles (python-docx)
 python-docx>=1.1.0
+# DOCX: правки с сохранением форматирования (runs) — https://pypi.org/project/docxedit/
+docxedit>=1.2.0
+# Браузерная автоматизация (Python API) — после установки: playwright install chromium
+playwright>=1.40.0

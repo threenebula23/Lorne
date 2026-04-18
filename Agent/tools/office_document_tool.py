@@ -317,6 +317,251 @@ def docx_document_patch_paragraphs(file_path: str, patches_json: str) -> Dict[st
     return {"path": str(path), "action": "patched", "patches_applied": applied, "paragraphs_total": total}
 
 
+def _apply_one_docx_op(doc: Any, op: Dict[str, Any]) -> None:
+    """Одна операция для docx_document_advanced_ops (python-docx)."""
+    name = str(op.get("op", "")).strip().lower()
+    if not name:
+        raise ValueError("op: пустое имя")
+
+    if name == "append_paragraph":
+        text = str(op.get("text", ""))
+        style = str(op.get("style", "Normal"))
+        _add_block(doc, text, style)
+        return
+
+    if name == "set_paragraph_alignment":
+        idx = int(op["paragraph_index"])
+        align = str(op.get("alignment", "left")).lower()
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        m = {
+            "left": WD_ALIGN_PARAGRAPH.LEFT,
+            "center": WD_ALIGN_PARAGRAPH.CENTER,
+            "right": WD_ALIGN_PARAGRAPH.RIGHT,
+            "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+        }
+        p = doc.paragraphs[idx]
+        p.alignment = m.get(align, WD_ALIGN_PARAGRAPH.LEFT)
+        return
+
+    if name == "set_paragraph_spacing":
+        idx = int(op["paragraph_index"])
+        p = doc.paragraphs[idx]
+        pf = p.paragraph_format
+        if "space_before_pt" in op:
+            from docx.shared import Pt
+
+            pf.space_before = Pt(float(op["space_before_pt"]))
+        if "space_after_pt" in op:
+            from docx.shared import Pt
+
+            pf.space_after = Pt(float(op["space_after_pt"]))
+        rule = str(op.get("line_rule", "")).lower()
+        if rule:
+            from docx.enum.text import WD_LINE_SPACING
+            from docx.shared import Pt
+
+            if rule in ("single", "1"):
+                pf.line_spacing_rule = WD_LINE_SPACING.SINGLE
+            elif rule in ("1.5", "one_point_five", "onepointfive"):
+                pf.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+            elif rule in ("double", "2"):
+                pf.line_spacing_rule = WD_LINE_SPACING.DOUBLE
+            elif rule == "exact" and "line_spacing_pt" in op:
+                pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+                pf.line_spacing = Pt(float(op["line_spacing_pt"]))
+            elif rule == "multiple" and "line_spacing" in op:
+                pf.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+                pf.line_spacing = float(op["line_spacing"])
+        return
+
+    if name == "set_paragraph_indent":
+        idx = int(op["paragraph_index"])
+        p = doc.paragraphs[idx]
+        pf = p.paragraph_format
+        from docx.shared import Cm
+
+        if "first_line_indent_cm" in op:
+            pf.first_line_indent = Cm(float(op["first_line_indent_cm"]))
+        if "left_indent_cm" in op:
+            pf.left_indent = Cm(float(op["left_indent_cm"]))
+        if "right_indent_cm" in op:
+            pf.right_indent = Cm(float(op["right_indent_cm"]))
+        return
+
+    if name == "set_run_font":
+        idx = int(op["paragraph_index"])
+        p = doc.paragraphs[idx]
+        run_idx = int(op.get("run_index", 0))
+        runs = list(p.runs)
+        if not runs:
+            raise ValueError("в абзаце нет runs")
+        if run_idx < 0:
+            targets = runs
+        elif 0 <= run_idx < len(runs):
+            targets = [runs[run_idx]]
+        else:
+            raise ValueError(f"run_index вне диапазона 0..{len(runs)-1} или -1")
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_UNDERLINE
+
+        for run in targets:
+            if "bold" in op:
+                run.bold = bool(op["bold"])
+            if "italic" in op:
+                run.italic = bool(op["italic"])
+            if "underline" in op:
+                run.underline = WD_UNDERLINE.SINGLE if op["underline"] else WD_UNDERLINE.NONE
+            if op.get("font_name"):
+                run.font.name = str(op["font_name"])
+            if "font_size_pt" in op:
+                run.font.size = Pt(float(op["font_size_pt"]))
+            hx = str(op.get("color_hex", "")).strip().lstrip("#")
+            if len(hx) == 6:
+                run.font.color.rgb = RGBColor(
+                    int(hx[0:2], 16), int(hx[2:4], 16), int(hx[4:6], 16)
+                )
+        return
+
+    if name == "set_section_margins":
+        si = int(op.get("section_index", 0))
+        sec = doc.sections[si]
+        from docx.shared import Cm
+
+        for key, attr in (
+            ("top_cm", "top_margin"),
+            ("bottom_cm", "bottom_margin"),
+            ("left_cm", "left_margin"),
+            ("right_cm", "right_margin"),
+        ):
+            if key in op:
+                setattr(sec, attr, Cm(float(op[key])))
+        return
+
+    if name == "set_section_orientation":
+        from docx.enum.section import WD_ORIENT
+
+        si = int(op.get("section_index", 0))
+        sec = doc.sections[si]
+        ori = str(op.get("orientation", "portrait")).lower()
+        if ori == "landscape":
+            if sec.orientation != WD_ORIENT.LANDSCAPE:
+                w, h = sec.page_width, sec.page_height
+                sec.orientation = WD_ORIENT.LANDSCAPE
+                sec.page_width, sec.page_height = h, w
+        else:
+            if sec.orientation != WD_ORIENT.PORTRAIT:
+                w, h = sec.page_width, sec.page_height
+                sec.orientation = WD_ORIENT.PORTRAIT
+                sec.page_width, sec.page_height = h, w
+        return
+
+    if name == "set_section_page_size_cm":
+        si = int(op.get("section_index", 0))
+        sec = doc.sections[si]
+        from docx.shared import Cm
+
+        if "width_cm" in op:
+            sec.page_width = Cm(float(op["width_cm"]))
+        if "height_cm" in op:
+            sec.page_height = Cm(float(op["height_cm"]))
+        return
+
+    if name == "insert_page_break_after_paragraph":
+        idx = int(op["paragraph_index"])
+        p = doc.paragraphs[idx]
+        from docx.enum.text import WD_BREAK
+
+        p.add_run().add_break(WD_BREAK.PAGE)
+        return
+
+    if name == "insert_table_after_paragraph":
+        idx = int(op["paragraph_index"])
+        rows = max(1, int(op.get("rows", 1)))
+        cols = max(1, int(op.get("cols", 1)))
+        p = doc.paragraphs[idx]
+        table = doc.add_table(rows=rows, cols=cols)
+        tbl_el = table._tbl
+        parent = tbl_el.getparent()
+        if parent is not None:
+            parent.remove(tbl_el)
+        p._p.addnext(tbl_el)
+        cell_texts = op.get("cell_texts")
+        if isinstance(cell_texts, list):
+            for i, row in enumerate(table.rows):
+                if i >= len(cell_texts):
+                    break
+                row_vals = cell_texts[i]
+                if not isinstance(row_vals, list):
+                    continue
+                for j, cell in enumerate(row.cells):
+                    if j >= len(row_vals):
+                        break
+                    cell.text = str(row_vals[j])
+        return
+
+    raise ValueError(f"неизвестная op: {name}")
+
+
+@tool
+def docx_document_advanced_ops(file_path: str, operations_json: str) -> Dict[str, Any]:
+    """Продвинутая вёрстка .docx (уровень ленты Word: Главная, Разметка страницы, Вставка, частично Макет).
+
+    operations_json — JSON-массив объектов с полем `op`. Поддерживаемые op:
+    - `append_paragraph`: text, style (как docx_document_create).
+    - `set_paragraph_alignment`: paragraph_index, alignment: left|center|right|justify.
+    - `set_paragraph_spacing`: paragraph_index; опционально space_before_pt, space_after_pt;
+      line_rule: single|1.5|double|exact|multiple; для exact — line_spacing_pt; для multiple — line_spacing (число).
+    - `set_paragraph_indent`: paragraph_index; first_line_indent_cm, left_indent_cm, right_indent_cm (опционально).
+    - `set_run_font`: paragraph_index; run_index (0..n-1 или -1 = все runs); bold, italic, underline, font_name, font_size_pt, color_hex (RRGGBB).
+    - `set_section_margins`: section_index (по умолчанию 0); top_cm, bottom_cm, left_cm, right_cm.
+    - `set_section_orientation`: section_index, orientation: portrait|landscape.
+    - `set_section_page_size_cm`: section_index, width_cm, height_cm.
+    - `insert_page_break_after_paragraph`: paragraph_index.
+    - `insert_table_after_paragraph`: paragraph_index, rows, cols; опционально cell_texts: [["a","b"], ...].
+
+    Ограничение: до 40 операций за вызов. Сноски, оглавление с полями PAGE, перекрёстные ссылки —
+    через OOXML или `code_interpreter` + python-docx/lxml; тулы их не генерируют автоматически.
+    """
+    try:
+        from docx import Document
+    except ImportError:
+        return {"error": "import", "detail": "pip install python-docx"}
+
+    items, err = _parse_json_list(operations_json, "operations_json")
+    if err:
+        return {"error": "bad_json", "detail": err}
+    if len(items) > 40:
+        return {"error": "too_many_ops", "max": 40, "got": len(items)}
+
+    path = resolve_abs_path(file_path)
+    if not path.is_file():
+        return {"error": "not_found", "path": str(path)}
+    if path.suffix.lower() != ".docx":
+        return {"error": "not_docx", "path": str(path)}
+
+    doc = Document(str(path))
+    applied = 0
+    errors: List[str] = []
+    for i, raw in enumerate(items):
+        if not isinstance(raw, dict):
+            errors.append(f"#{i}: не объект")
+            continue
+        try:
+            _apply_one_docx_op(doc, raw)
+            applied += 1
+        except Exception as e:
+            errors.append(f"#{i} ({raw.get('op')}): {e}")
+    doc.save(str(path))
+    return {
+        "path": str(path),
+        "action": "docx_advanced",
+        "applied": applied,
+        "errors": errors,
+        "ok": not errors,
+    }
+
+
 @tool
 def pdf_styled_document_create(file_path: str, sections_json: str, title: str = "") -> Dict[str, Any]:
     """Создаёт PDF с «логическими» стилями (заголовки и body через ReportLab). Перезаписывает файл.

@@ -12,7 +12,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.widgets import (
-    Button, DirectoryTree, Input, Label, ListItem, ListView,
+    Button, Checkbox, DirectoryTree, Input, Label, ListItem, ListView,
     Select, Static, TabbedContent, TabPane, TextArea,
 )
 from textual.message import Message
@@ -291,6 +291,20 @@ class FileExplorerPanel(Vertical):
             id="hotkeys-display",
         ))
 
+        container.mount(Label("── 🌐 Режим Agent — браузер Python (Playwright) ──"))
+        pw_py = bool(prefs.get("playwright_python_enabled", False))
+        container.mount(Checkbox(
+            "Включить инструменты Python Playwright (Chromium) в режиме Agent",
+            value=pw_py,
+            id="fe-playwright-python",
+        ))
+        container.mount(Static(
+            "По умолчанию выключено: спроси пользователя в чате, нужен ли этот слой. "
+            "Нужны: pip install playwright и playwright install chromium. "
+            "Без галочки доступны только browser_* (Node + Playwright в .mjs).",
+            id="fe-playwright-hint",
+        ))
+
     @on(DirectoryTree.FileSelected)
     def on_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         self.post_message(FileSelected(event.path))
@@ -374,6 +388,18 @@ class FileExplorerPanel(Vertical):
             save_prefs(density=density)
         except Exception:
             pass
+
+    @on(Checkbox.Changed, "#fe-playwright-python")
+    def on_playwright_python_toggle(self, event: Checkbox.Changed) -> None:
+        try:
+            from Interface.ui_prefs import save_prefs
+            save_prefs(playwright_python_enabled=bool(event.value))
+            self.notify(
+                "Сохранено. В режиме Agent список тулов обновится при следующем сообщении "
+                "или сразу при переключении режима.",
+            )
+        except Exception as e:
+            self.notify(f"Ошибка: {e}", severity="error")
 
     @on(Select.Changed, "#fe-syntax-select")
     def on_syntax_theme_change(self, event: Select.Changed) -> None:

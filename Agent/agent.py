@@ -150,6 +150,27 @@ def _refresh_runtime_tools() -> None:
         agent_graph.llm_raw = llm
         agent_graph.tool_map = _tool_map
 
+
+def _sync_tui_tool_bundle(is_agent: bool) -> None:
+    """Пересобрать глобальный список тулов: в Agent — Node browser; Python Playwright — только из настроек."""
+    global tools
+    pw = False
+    if is_agent:
+        try:
+            from Interface.ui_prefs import load_prefs
+            pw = bool(load_prefs().get("playwright_python_enabled", False))
+        except Exception:
+            pw = False
+    try:
+        from Agent.tool_registry import set_tool_session_prefs, build_tools
+        set_tool_session_prefs(agent_mode=is_agent, playwright_python=pw)
+        fresh, _cust = build_tools(agent_mode=is_agent, playwright_python=pw)
+        tools.clear()
+        tools.extend(fresh)
+        _refresh_runtime_tools()
+    except Exception:
+        pass
+
 # ─── Project analysis ──────────────────────────────────────────────
 _SKIP_DIRS = {
     ".git", ".idea", "__pycache__", "node_modules", ".venv", "venv",
@@ -624,9 +645,18 @@ def run_coding_agent_loop():
                     plan_spinner.stop()
                     if steps:
                         try:
-                            from .tool_registry import save_plan, update_plan
-                            save_plan.invoke({"title": user_input[:120], "steps": steps})
-                            update_plan.invoke({"step_index": 0, "status": "in_progress", "note": ""})
+                            from .tool_registry import plan_tool
+                            plan_tool.invoke({
+                                "action": "save",
+                                "title": user_input[:120],
+                                "steps_json": json.dumps(steps, ensure_ascii=False),
+                            })
+                            plan_tool.invoke({
+                                "action": "update",
+                                "step_index": 0,
+                                "status": "in_progress",
+                                "note": "",
+                            })
                             print_success(f"План создан: {len(steps)} шагов")
                         except Exception as e:
                             print_warning(f"Не удалось сохранить план: {e}")
@@ -638,12 +668,12 @@ def run_coding_agent_loop():
                     HumanMessage(
                         content=(
                             f"Задача: {user_input}\n\n"
-                            "ПЛАН УЖЕ СОХРАНЁН через save_plan(). НЕ вызывай save_plan() снова.\n"
+                            "ПЛАН УЖЕ СОХРАНЁН через plan_tool(action='save', …). НЕ вызывай save снова.\n"
                             "Выполняй шаги по порядку, начиная с шага 0:\n"
-                            "1. update_plan(step_index=N, status='in_progress') — перед началом шага\n"
+                            "1. plan_tool(action='update', step_index=N, status='in_progress') — перед началом шага\n"
                             "2. Выполни нужные действия (создай файл, запусти команду и т.д.)\n"
                             "3. ПРОВЕРЬ результат — если ошибка, исправь её, НЕ отмечай как completed\n"
-                            "4. update_plan(step_index=N, status='completed') — только если шаг успешен\n\n"
+                            "4. plan_tool(action='update', step_index=N, status='completed') — только если шаг успешен\n\n"
                             "ВАЖНО: Если нужно создать файл и запустить его — СНАЧАЛА создай файл, ПОТОМ запускай.\n"
                             "После выполнения дай чёткий ответ на РУССКОМ: что сделано, какие файлы, как запустить."
                         )
@@ -703,7 +733,7 @@ def run_tui_mode():
 
 === ИНСТРУКЦИИ СЕССИИ ===
 Ты знаешь структуру проекта. Используй это для навигации и работы с кодовой базой.
-Используй rag_search для поиска по документам. Используй think() чтобы записывать свои рассуждения.
+Используй rag_search для поиска по документам. Для записи рассуждений в панель — reasoning_tool(action='think', thought='...').
 """
 
     session_id = create_session("tui-session")
@@ -736,6 +766,8 @@ def run_tui_mode():
         def _do_work():
             nonlocal messages
             try:
+                _mode_now = (tui_agent_mode[0] or "normal").lower()
+                _sync_tui_tool_bundle(_mode_now == "agent")
                 cmd_ctx = {
                     "messages": messages,
                     "session_id": session_id,
@@ -901,6 +933,10 @@ def run_tui_mode():
         tui_agent_mode[0] = mode_lower
         creator_mode_active[0] = mode_lower == "creator"
         research_mode_active[0] = mode_lower == "research"
+        try:
+            _sync_tui_tool_bundle(mode_lower == "agent")
+        except Exception:
+            pass
         try:
             if mode_lower == "creator":
                 app.call_from_thread(
