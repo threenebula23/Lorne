@@ -128,21 +128,32 @@ _playwright_python_tools: List[Any] = []
 if _HAS_PLAYWRIGHT_SYNC:
     _playwright_python_tools.append(playwright_sync)
 
-_tool_session_flags: Dict[str, bool] = {"agent_mode": False, "playwright_python": False}
+_tool_session_flags: Dict[str, bool] = {
+    "agent_mode": False,
+    "playwright_python": False,
+    "browser_tools": True,
+}
 
 
-def set_tool_session_prefs(*, agent_mode: bool = False, playwright_python: bool = False) -> None:
+def set_tool_session_prefs(
+    *,
+    agent_mode: bool = False,
+    playwright_python: bool = False,
+    browser_tools: bool = True,
+) -> None:
     _tool_session_flags["agent_mode"] = bool(agent_mode)
     _tool_session_flags["playwright_python"] = bool(playwright_python)
+    _tool_session_flags["browser_tools"] = bool(browser_tools)
 
 
 def build_tools(
     agent_mode: bool = False,
     playwright_python: bool = False,
+    browser_tools: bool = True,
 ) -> tuple[List[Any], Any]:
     custom = load_custom_tools()
     all_tools = list(_base_tools) + list(custom)
-    if agent_mode and _browser_node_tools:
+    if agent_mode and browser_tools and _browser_node_tools:
         all_tools.extend(_browser_node_tools)
     if agent_mode and playwright_python and _playwright_python_tools:
         all_tools.extend(_playwright_python_tools)
@@ -183,7 +194,8 @@ def reload_tools(current_tools: List[Any]) -> List[Any]:
     custom_new = reload_custom_tools()
     am = _tool_session_flags.get("agent_mode", False)
     pw = _tool_session_flags.get("playwright_python", False)
-    fresh, _ = build_tools(agent_mode=am, playwright_python=pw)
+    bw = _tool_session_flags.get("browser_tools", True)
+    fresh, _ = build_tools(agent_mode=am, playwright_python=pw, browser_tools=bw)
     current_tools.clear()
     current_tools.extend(fresh)
     return custom_new

@@ -81,6 +81,24 @@ class TUIBridge:
     def on_model_reply(self, text: str, usage: Optional[Dict[str, Any]] = None) -> None:
         self._call(self.app.chat.add_assistant_message, text, usage)
 
+    def on_chat_user_message(self, text: str, turn_index: int) -> None:
+        """Сообщение пользователя с индексом хода (кнопка отката)."""
+        self._call(self.app.chat.add_user_message, text, turn_index)
+
+    def on_chat_reload_messages(self, messages: List[Any]) -> None:
+        """Перерисовка чата после отката или смены сессии.
+
+        Нельзя использовать call_from_thread из потока приложения — Textual выбрасывает
+        RuntimeError. call_later безопасен и с UI-потока (после выбора сессии), и с воркера.
+        """
+        try:
+            self.app.call_later(self.app.chat.rebuild_from_langchain_messages, messages)
+        except Exception as e:
+            try:
+                print(f"[TUI Bridge reload error] {e}", file=sys.stderr)
+            except Exception:
+                pass
+
     def on_separator(self, label: str = "") -> None:
         self._call(self.app.chat.add_separator, label)
 

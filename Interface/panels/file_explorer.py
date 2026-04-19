@@ -102,6 +102,12 @@ class RunFileRequested(Message):
         self.path = path
 
 
+class OpenChatSettings(Message):
+    def __init__(self, section: str) -> None:
+        super().__init__()
+        self.section = section
+
+
 class FileExplorerPanel(Vertical):
     """Left upper panel: Files + Settings (API, тема, редактор)."""
 
@@ -160,150 +166,45 @@ class FileExplorerPanel(Vertical):
             pass
 
     def _populate_settings(self) -> None:
-        from Interface.ui_prefs import load_prefs
-        from Interface.themes import DARK_THEMES, LIGHT_THEMES, ALL_THEME_NAMES, apply_theme
-
-        prefs = load_prefs()
         container = self.query_one("#settings-panel", VerticalScroll)
-
-        container.mount(Label("── 🎨 Theme ── (global)"))
-        theme_options = (
-            [(f"🌙 {t}", t) for t in DARK_THEMES] +
-            [(f"☀️ {t}", t) for t in LIGHT_THEMES]
+        for w in list(container.children):
+            w.remove()
+        container.mount(Label("⚙️ Настройки чата и моделей", classes="settings-title"))
+        container.mount(
+            Button(
+                "🎨 Персонализация\nТема, плотность, подсветка, палитра",
+                id="fe-open-settings-personalization",
+                variant="primary",
+            )
         )
-        theme_val = prefs.get("theme", "Purple Dark")
-        if theme_val not in ALL_THEME_NAMES:
-            theme_val = "Purple Dark"
-        container.mount(Select(
-            theme_options, value=theme_val,
-            id="fe-theme-select", allow_blank=False,
-        ))
-
-        container.mount(Label("── 📐 Размер интерфейса ── (вкладки, кнопки, чат, шрифт в терминале)"))
-        dens = prefs.get("density", "normal")
-        if dens not in ("compact", "normal", "spacious"):
-            dens = "normal"
-        container.mount(Select(
-            [
-                ("Компактный", "compact"),
-                ("Обычный", "normal"),
-                ("Крупный", "spacious"),
-            ],
-            value=dens, id="fe-density-select",
-        ))
-
-        container.mount(Label("── 🎨 Syntax Highlighting ── (global)"))
-        syn = prefs.get("syntax_theme", "monokai")
-        syn_opts = tuple(SYNTAX_THEME_MAP.keys())
-        if syn not in syn_opts:
-            syn = "monokai"
-        syn_actual = SYNTAX_THEME_MAP.get(syn, "monokai")
-        container.mount(Select(
-            [
-                ("Monokai", "monokai"),
-                ("Dracula", "dracula"),
-                ("GitHub Dark", "github_dark"),
-                ("GitHub Light", "github_light"),
-                ("VS Dark", "vs_dark"),
-                ("Nord", "nord"),
-                ("One Dark", "one_dark"),
-                ("One Light", "one_light"),
-                ("Material", "material"),
-                ("Zenburn", "zenburn"),
-                ("Solarized Dark", "solarized_dark"),
-                ("Solarized Light", "solarized_light"),
-            ],
-            value=syn, id="fe-syntax-select", allow_blank=False,
-        ))
-
-        container.mount(Label("── 🎨 Accent Color ── (global)"))
-        accent_val = prefs.get("accent_color", "#8B5CF6")
-
-        colors = [
-            "#8B5CF6", "#A78BFA", "#7C3AED", "#6366F1", "#3B82F6", "#06B6D4", "#10B981", "#22C55E",
-            "#84CC16", "#EAB308", "#F59E0B", "#F97316", "#EF4444", "#EC4899", "#D946EF", "#14B8A6",
-            "#0EA5E9", "#2563EB", "#4F46E5", "#9333EA", "#DB2777", "#DC2626", "#111827", "#FFFFFF",
-        ]
-        self._swatch_map.clear()
-        for idx, c in enumerate(colors):
-            btn_id = f"color-swatch-{idx}"
-            self._swatch_map[btn_id] = c
-
-        container.mount(Input(
-            value=accent_val,
-            placeholder="#RRGGBB",
-            id="fe-accent-input",
-        ))
-        container.mount(Button("🎨 Палитра", id="fe-palette-btn"))
-
-        try:
-            from Interface.themes import ensure_custom_textarea_themes
-            apply_theme(self.app, theme_val)
-            for d in ("compact", "normal", "spacious"):
-                self.app.remove_class(f"density-{d}")
-            self.app.add_class(f"density-{dens}")
-            for ta in self.app.query(TextArea):
-                ensure_custom_textarea_themes(ta)
-                ta.theme = syn_actual
-        except Exception:
-            pass
-
-        container.mount(Label("── 🔑 OpenRouter API ──"))
-        current_key = os.environ.get("OPENROUTER_API_KEY", "")
-        masked = current_key[:8] + "…" if len(current_key) > 8 else current_key
-        container.mount(Input(
-            value=masked, placeholder="sk-or-…",
-            password=True, id="fe-openrouter-key",
-        ))
-        container.mount(Button("Сохранить ключ", id="fe-save-api-key"))
-
-        container.mount(Label("── 🖥 Локальная модель ──"))
-        local_url = os.environ.get("LOCAL_MODEL_URL", "http://localhost:1234/v1")
-        container.mount(Input(
-            value=local_url, placeholder="http://localhost:1234/v1",
-            id="fe-local-model-url",
-        ))
-        container.mount(Button("Сохранить URL", id="fe-save-local-url"))
-
-        container.mount(Label("── 💰 Баланс OpenRouter ──"))
-        container.mount(Button("Проверить баланс", id="fe-check-balance"))
-        container.mount(Static("", id="fe-balance-display"))
-
-        container.mount(Label("── 🤖 Своя модель ──"))
-        container.mount(Input(placeholder="например openai/gpt-4o", id="fe-custom-model"))
-        container.mount(Button("Добавить в список", id="fe-add-model-btn"))
-
-        prof = os.getenv("TCA_PROFILE", "balanced").lower()
-        if prof not in ("fast", "balanced", "quality"):
-            prof = "balanced"
-        container.mount(Label("── 📊 Профиль LLM (TCA_PROFILE) ──"))
-        container.mount(Select(
-            [("Fast", "fast"), ("Balanced", "balanced"), ("Quality", "quality")],
-            value=prof, id="fe-profile-select",
-        ))
-
-        container.mount(Label("── ⌨️ Горячие клавиши ──"))
-        container.mount(Static(
-            "[bold]Ctrl+S[/] Сохранить файл  [bold]Ctrl+F[/] Поиск  [bold]Ctrl+W[/] Закрыть вкладку\n"
-            "[bold]Ctrl+B[/] Сайдбар  [bold]F5[/] Запуск файла  [bold]Ctrl+Shift+X[/] Стоп агента\n"
-            "[bold]Esc[/] Фокус в чат  [bold]F6/F7[/] Ширина левой колонки\n"
-            "[bold]M[/] Меню по файлу  [bold]Ctrl+Click[/] как правый клик (Mac)",
-            id="hotkeys-display",
-        ))
-
-        container.mount(Label("── 🌐 Режим Agent — браузер Python (Playwright) ──"))
-        pw_py = bool(prefs.get("playwright_python_enabled", False))
-        container.mount(Checkbox(
-            "Включить инструменты Python Playwright (Chromium) в режиме Agent",
-            value=pw_py,
-            id="fe-playwright-python",
-        ))
-        container.mount(Static(
-            "По умолчанию выключено: спроси пользователя в чате, нужен ли этот слой. "
-            "Нужны: pip install playwright и playwright install chromium. "
-            "Без галочки доступны только browser_* (Node + Playwright в .mjs).",
-            id="fe-playwright-hint",
-        ))
+        container.mount(
+            Button(
+                "🤖 Agents\nПрофиль агента и спец. инструменты",
+                id="fe-open-settings-agents",
+                variant="default",
+            )
+        )
+        container.mount(
+            Button(
+                "🔑 OpenRouter\nAPI ключ и добавление моделей",
+                id="fe-open-settings-openrouter",
+                variant="default",
+            )
+        )
+        container.mount(
+            Button(
+                "🦙 Ollama\nПодключение, модели, пресеты",
+                id="fe-open-settings-ollama",
+                variant="default",
+            )
+        )
+        container.mount(Button("✖ Закрыть вкладку настроек", id="fe-open-settings-close", variant="error"))
+        container.mount(
+            Static(
+                "Секция открывается отдельной вкладкой в центре рабочей области.\n"
+                "Кнопка «Закрыть вкладку» — в верхней панели этой вкладки."
+            )
+        )
 
     @on(DirectoryTree.FileSelected)
     def on_file_selected(self, event: DirectoryTree.FileSelected) -> None:
@@ -361,6 +262,10 @@ class FileExplorerPanel(Vertical):
                 self.query_one("#fe-accent-input", Input).value = selected
                 self._apply_accent_color(selected)
             self.app.push_screen(_ColorPaletteDialog(self._swatch_map, _on_color_selected))
+        elif btn_id.startswith("fe-open-settings-"):
+            section = btn_id.replace("fe-open-settings-", "", 1).strip().lower()
+            if section:
+                self.post_message(OpenChatSettings(section))
 
     @on(Select.Changed, "#fe-theme-select")
     def on_theme_change(self, event: Select.Changed) -> None:

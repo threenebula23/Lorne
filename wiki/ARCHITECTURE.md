@@ -50,12 +50,12 @@
 
 | Файл | Роль |
 |------|------|
-| **`agent.py`** | Старт TUI или classic CLI; `TUIBridge` создаётся только в TUI; общий граф и сессии. |
-| **`graph_runner.py`** | Узлы LangGraph: `call_model`, `execute_tools`, маршрутизация `should_continue`. |
+| **`agent.py`** | Старт TUI или classic CLI; `TUIBridge` только в TUI; граф, сессии, снимки перед ходом, **`handle_rollback`** (откат чата + workspace). |
+| **`graph_runner.py`** | Узлы LangGraph: `call_model`, `execute_tools`, маршрутизация `should_continue`. Read-only тулы из фиксированного набора выполняются **параллельно** (пул потоков), остальные — по очереди. При ошибке `bind_tools` из-за `parallel_tool_calls` — повторная привязка с `force_no_parallel`. |
 | **`tool_registry.py`** | Сборка списка: `_base_tools` (в т.ч. мульти-тулы из `compact_tools.py`), кастомные, `build_tools(agent_mode, playwright_python)`, `set_tool_session_prefs`, `bind_tools_safe()`. |
 | **`llm_provider.py`** | OpenRouter-клиент, профили (`fast`/`balanced`/`quality`), список моделей, ретраи. |
 | **`command_router.py`** | Slash-команды (`/model`, `/plan`, …) в classic-режиме. |
-| **`planner.py`** | Построение плана задачи через LLM, запись в `.tca_plan.json`. |
+| **`planner.py`** | Построение плана задачи через LLM (`build_plan`); сохранение в файл делает **`planning_tool`** → `.tca/plan.json`. |
 | **`message_utils.py`** | Санитизация истории, компактирование, усечение результатов инструментов. |
 | **`git_integration.py`** | Обёртка над GitPython: статус, diff, автокоммиты при записи файлов (если включено). |
 | **`creator_mode.py`** | Creator Mode: воркеры, оркестрация (`sequential` / `parallel` / `supervisor` / `hierarchical`), сводка супервайзера. |
@@ -73,8 +73,8 @@
 |---------|------------|
 | **`Agent/tools/`** | Реализации `@tool` для LangChain: файлы, терминал, git, web, RAG-обёртки, PDF, кастомные инструменты и т.д. См. [TOOLS.md](TOOLS.md). |
 | **`Agent/rag/`** | Индексация проекта, чанкинг, `get_rag_tool()` для `rag_search`. |
-| **`Agent/checkpoint/`** | SQLite-сессии: сообщения, восстановление диалога (файл `.tca/checkpoints.sqlite` в проекте). |
-| **`Agent/versioning/`** | SQLite-снимки содержимого файлов до правок, откат. |
+| **`Agent/checkpoint/`** | SQLite: `sessions`, `checkpoints`, снимки ходов `turn_snapshots` / `turn_workspace_snapshots` (откат TUI — см. `restore_turn_workspace`). Файл: `.tca/checkpoints.sqlite`. |
+| **`Agent/versioning/`** | SQLite-снимки содержимого файлов до правок, откат; снимки path→version для отката хода и удаление «новых после метки» файлов. Файл: `.tca/versions.sqlite`. |
 | **`Agent/file_loading/`** | Загрузка/подготовка файлов для RAG и контекста. |
 
 ---
@@ -114,11 +114,12 @@
 | Файл | Роль |
 |------|------|
 | **`tui_app.py`** | `TCAApp`: слева дерево + панель агентов, по центру вкладки (чат + файлы), CSS в `tui_app.tcss`. |
-| **`tui_bridge.py`** | Singleton-мост: агент в фоне вызывает `call_from_thread` для обновления панелей, подтверждений, стопа. |
+| **`tui_bridge.py`** | Singleton-мост: `call_from_thread` / `call_later`; `on_chat_user_message(turn_index)`, `on_chat_reload_messages` после отката или смены сессии. |
 | **`themes.py`** | Темы оформления, применение к приложению. |
-| **`ui_prefs.py`** | Тема, `density`, подсветка, акцент, **`playwright_python_enabled`** → `.tca/ui_settings.json`. |
+| **`ui_prefs.py`** | Тема, `density`, подсветка, акцент; **`playwright_python_enabled`**, **`browser_tools_enabled`**; пользовательские модели и пресеты **Ollama** / OpenRouter → `.tca/ui_settings.json`. |
 | **`visualization.py`** | Rich-вывод для **classic** режима: результаты инструментов, RAG. |
 | **`graph_display.py`** | Отображение прогресса Creator Mode (classic). |
+| **`session_picker_screen.py`** | Модальный экран выбора сессии при старте TUI (открыть / удалить / новый чат). |
 | **`splash.py`**, **`input_widget.py`**, **`path_loading.py`** | Вспомогательные виджеты/экраны. |
 | **`tui_app.tcss`** | Стили Textual для IDE. |
 
@@ -128,11 +129,11 @@
 
 | Файл | Панель |
 |------|--------|
-| `file_explorer.py` | Дерево файлов, вкладка настроек (тема, размер UI, ключи), контекст в чат. |
+| `file_explorer.py` | Дерево файлов, вкладки настроек (персонализация, агенты, OpenRouter, Ollama), контекст в чат. |
 | `active_agents_panel.py` | Дерево Creator / режимов; выбор воркера или «Общий чат». |
 | `workspace_center.py` | Вкладки: постоянный чат + вкладки редактора/просмотра. |
 | `code_editor.py` | Редактор файлов и **Jupyter `.ipynb`** (ячейки, run, autosave). |
-| `ai_chat.py` | Чат, модель, режим (Normal / Creator / …), контекст, метрики окна/сессии. |
+| `ai_chat.py` | Чат, модель, режимы **Normal / Creator / Agent / Research**, контекст, метрики; у пользовательских сообщений — кнопка отката хода (`RollbackRequested` → `agent.handle_rollback`). |
 | `terminal_panel.py`, `version_control.py` | Модули на месте; в текущем layout IDE могут не монтироваться — см. `tui_app.py`. |
 
 Сообщения Textual (`FileSaved`, `ChatSubmitted`, …) связывают панели с `agent.py` без жёсткой связи на уровне импортов циклов — часто через `post_message` и мост.
@@ -156,23 +157,22 @@
 | Путь | Модуль | Содержимое |
 |------|--------|------------|
 | `Agent/.env` | `dotenv` | `OPENROUTER_API_KEY` |
-| `~/.tca_config.json` | `llm_provider` | Выбранная модель |
-| `.tca/checkpoints.sqlite` | `checkpoint` | История сообщений сессий |
-| `.tca/versions.sqlite` | `versioning` | Снимки файлов |
-| `.tca/ui_settings.json` | `ui_prefs` | Тема, плотность UI, подсветка, акцент |
+| `~/.tca_config.json` | `llm_provider`, Creator | Модель по умолчанию, секция `creator`, прочие глобальные настройки |
+| `.tca/checkpoints.sqlite` | `checkpoint` | `sessions`, `checkpoints`, снимки ходов для отката |
+| `.tca/versions.sqlite` | `versioning` | Версии содержимого файлов |
+| `.tca/ui_settings.json` | `ui_prefs` | Тема, плотность, подсветка; браузерные тулы; свои модели и Ollama |
 | `.tca/plan.json` | `planning_tool` | Текущий план |
 | `~/.tca_custom_tools/*.py` | `custom_tools` | Пользовательские инструменты |
-| `.tca/` (в проекте) | UI prefs и др. | Настройки интерфейса |
 
 ---
 
 ## 8. Поток одного запроса в TUI
 
-1. Пользователь вводит текст в **`AIChatPanel`** → сообщение → **`agent.py`** (`_tui_run` / аналог).
+1. Пользователь вводит текст в **`AIChatPanel`** → сообщение → **`agent.py`** (`_tui_run` / аналог). Перед добавлением `HumanMessage` сохраняются **`save_pre_turn_snapshot`** и **`save_pre_turn_workspace_snapshot`** (индекс хода = число предыдущих пользовательских сообщений).
 2. Строится граф с историей из checkpoint при необходимости.
-3. **`graph_runner`** вызывает LLM → при `tool_calls` — **`execute_tools`** (чтение параллельно, запись последовательно — см. код).
+3. **`graph_runner`** вызывает LLM → при `tool_calls` — **`execute_tools`** (набор read-only-only → параллельно, иначе по очереди).
 4. Результаты стримятся в чат через **`TUIBridge`** (`on_tool`, `on_token`, …).
-5. Состояние сохраняется в SQLite через **`checkpoint`**.
+5. Состояние сохраняется в SQLite через **`checkpoint`**. Откат хода: `load_pre_turn_snapshot` + **`restore_turn_workspace`**, затем удаление более новых снимков и `save_state`.
 
 ---
 

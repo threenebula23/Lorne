@@ -68,7 +68,8 @@ def _build_ctx_cache() -> Dict[str, int]:
         return _MODEL_CTX_CACHE
     result: Dict[str, int] = {}
     try:
-        from Agent.llm_provider import AVAILABLE_MODELS as _models
+        from Agent.llm_provider import get_available_models
+        _models = get_available_models()
     except ImportError:
         _models = []
     for m in _models:

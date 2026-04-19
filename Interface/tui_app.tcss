@@ -170,6 +170,33 @@ Underline {
     height: 1fr;
 }
 
+#settings-panel {
+    padding: 0 1;
+}
+
+#settings-panel .settings-title {
+    color: #A78BFA;
+    text-style: bold;
+    margin: 1 0 1 0;
+}
+
+#settings-panel Button {
+    height: 4;
+    min-height: 4;
+    width: 100%;
+    margin: 0 0 1 0;
+    text-align: left;
+    content-align: left middle;
+    border: solid #3D3D4D;
+    background: #1a1a2e;
+    color: #E5E7EB;
+}
+
+#settings-panel Button:hover {
+    background: #2a1f45;
+    border: solid #8B5CF6;
+}
+
 FilteredDirectoryTree > .tree--cursor {
     background: #8B5CF6 30%;
     color: #E5E7EB;

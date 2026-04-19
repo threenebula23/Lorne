@@ -1,7 +1,7 @@
 """Инструменты работы с файлами: чтение, листинг, поиск в подпапках, редактирование."""
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import tool
 
@@ -30,6 +30,64 @@ def _git_auto_snapshot(file_path: str, action: str) -> None:
 
 def _skip_dir(name: str) -> bool:
     return name.startswith(".") or name == "__pycache__" or name == "node_modules" or name == ".git"
+
+
+def _content_to_line_chunks(content: str) -> List[str]:
+    """Разбивает вставляемый текст на физические строки с сохранением переводов (как в splitlines(keepends=True))."""
+    if content == "":
+        return []
+    # Несколько логических строк без финального \\n — иначе последняя склеится со следующей строкой файла.
+    if "\n" in content and not content.endswith("\n"):
+        content = content + "\n"
+    if content.endswith("\n"):
+        return content.splitlines(keepends=True)
+    parts = content.split("\n")
+    out: List[str] = []
+    for i, p in enumerate(parts):
+        if i < len(parts) - 1:
+            out.append(p + "\n")
+        else:
+            out.append(p)
+    return out
+
+
+def _old_str_variants(old_str: str) -> List[str]:
+    """Варианты old_str для поиска: точный, LF↔CRLF (модель часто шлёт \\n, файл с Windows — \\r\\n)."""
+    out: List[str] = []
+    seen: set[str] = set()
+
+    def add(s: str) -> None:
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+
+    add(old_str)
+    if "\r\n" in old_str:
+        add(old_str.replace("\r\n", "\n"))
+    elif "\n" in old_str:
+        add(old_str.replace("\n", "\r\n"))
+    return out
+
+
+def _new_str_for_variant(old_variant: str, old_original: str, new_str: str) -> str:
+    """Подгоняет переводы строк в new_str к тому варианту old_str, который сматчился."""
+    if old_variant == old_original:
+        return new_str
+    if "\r\n" not in old_original and old_variant == old_original.replace("\n", "\r\n"):
+        return new_str.replace("\n", "\r\n")
+    if "\r\n" in old_original and old_variant == old_original.replace("\r\n", "\n"):
+        return new_str.replace("\r\n", "\n")
+    return new_str
+
+
+def _replace_first_occurrence(text: str, old_str: str, new_str: str) -> Optional[str]:
+    """Одна замена old_str → new_str; учитывает рассогласование \\n vs \\r\\n между моделью и файлом."""
+    for old_variant in _old_str_variants(old_str):
+        if old_variant not in text:
+            continue
+        new_out = _new_str_for_variant(old_variant, old_str, new_str)
+        return text.replace(old_variant, new_out, 1)
+    return None
 
 
 @tool
@@ -136,14 +194,14 @@ def edit_file(path: str, old_str: str, new_str: str) -> Dict[str, Any]:
             "snapshot_id": snapshot_id,
         }
     try:
-        original = full_path.read_text(encoding="utf-8")
+        original = full_path.read_text(encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return {"path": str(full_path), "action": "file_not_found"}
     before_total_lines = len(original.splitlines())
-    if old_str not in original:
+    edited = _replace_first_occurrence(original, old_str, new_str)
+    if edited is None:
         return {"path": str(full_path), "action": "old_str not found"}
     snapshot_id = save_version(str(full_path), original, note="before-edit_file-replace") or ""
-    edited = original.replace(old_str, new_str, 1)
     full_path.write_text(edited, encoding="utf-8")
     _git_auto_snapshot(str(full_path), "edit_file")
     old_lines = len(old_str.splitlines())
@@ -193,6 +251,7 @@ def write_file(path: str, content: str) -> Dict[str, Any]:
 def replace_file_lines(path: str, start_line: int, end_line: int, content: str) -> Dict[str, Any]:
     """Точечная замена диапазона строк (как патч): строки start_line–end_line включительно (нумерация с 1) заменяются на content.
     Не пересылай весь файл — только новый фрагмент. content может быть пустым (удаление диапазона).
+    Если в content несколько строк, лучше заканчивать последнюю переводом строки; иначе он будет добавлен автоматически.
     Перед вызовом прочитай нужный участок через read_file с offset/limit."""
     full_path = resolve_abs_path(path)
     if start_line < 1 or end_line < start_line:
@@ -213,24 +272,14 @@ def replace_file_lines(path: str, start_line: int, end_line: int, content: str) 
         end_line = min(end_line, n)
     before_total = n
     snapshot_id = save_version(str(full_path), raw, note="before-replace_file_lines") or ""
-    # new block as lines with newlines preserved
-    if content == "":
-        new_block: List[str] = []
-    else:
-        if content.endswith("\n"):
-            new_block = content.splitlines(keepends=True)
-        else:
-            parts = content.split("\n")
-            new_block = [parts[i] + ("\n" if i < len(parts) - 1 else "") for i in range(len(parts))]
-            if len(parts) == 1 and parts[0] == "":
-                new_block = []
+    new_block = _content_to_line_chunks(content)
     new_lines = lines[: start_line - 1] + new_block + lines[end_line:]
     new_text = "".join(new_lines)
     full_path.write_text(new_text, encoding="utf-8")
     _git_auto_snapshot(str(full_path), "replace_file_lines")
     after_total = len(new_text.splitlines())
     removed = end_line - start_line + 1
-    added = len(new_block) if new_block else 0
+    added = len(new_block)
     return {
         "path": str(full_path),
         "action": "lines_replaced",
@@ -248,7 +297,8 @@ def replace_file_lines(path: str, start_line: int, end_line: int, content: str) 
 
 @tool
 def insert_file_lines(path: str, after_line: int, content: str) -> Dict[str, Any]:
-    """Вставить content после строки after_line. after_line=0 — в начало файла; after_line=k — после k-й строки (1-based)."""
+    """Вставить content после строки after_line. after_line=0 — в начало файла; after_line=k — после k-й строки (1-based).
+    Несколько строк без финального \\n: последняя строка не склеится со следующей строкой файла (добавляется перевод строки)."""
     full_path = resolve_abs_path(path)
     if after_line < 0:
         return {"path": str(full_path), "error": "after_line must be >= 0"}
@@ -265,12 +315,8 @@ def insert_file_lines(path: str, after_line: int, content: str) -> Dict[str, Any
         return {"path": str(full_path), "error": "after_line past eof", "total_lines": n}
     before_total = n
     snapshot_id = save_version(str(full_path), raw, note="before-insert_file_lines") or ""
-    if content.endswith("\n"):
-        block = content.splitlines(keepends=True)
-    else:
-        parts = content.split("\n")
-        block = [parts[i] + ("\n" if i < len(parts) - 1 else "") for i in range(len(parts))]
-    insert_at = after_line  # after_line lines before stay: indices 0..after_line-1 for after_line>0 means insert at index after_line
+    block = _content_to_line_chunks(content)
+    insert_at = after_line
     new_lines = lines[:insert_at] + block + lines[insert_at:]
     new_text = "".join(new_lines)
     full_path.write_text(new_text, encoding="utf-8")

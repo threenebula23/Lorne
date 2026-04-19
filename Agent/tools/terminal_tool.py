@@ -61,6 +61,7 @@ def _is_dangerous(command: str) -> bool:
 @tool
 def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[str, Any]:
     """Выполняет команду в терминале (Windows: cmd, Unix: sh) ТОЛЬКО с подтверждением пользователя.
+    stdin у процесса закрыт (неинтерактивный режим): программы с input() или ожиданием ввода получат EOF и завершатся или выдадут ошибку — используй неинтерактивные флаги, echo/pipe или другой способ.
     cwd — рабочая директория: пустая строка или '.' = текущая директория проекта. Если путь не существует — команда выполнится в текущей директории."""
     from pathlib import Path
     from Terminal.runner import run_command_safe

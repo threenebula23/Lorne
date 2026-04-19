@@ -43,7 +43,7 @@
 3. Документация пакета — `library_context`: при неизвестном id сначала `resolve`, затем `docs`; размытый запрос — `search` + при необходимости `web_fetch`.
 
 ### Версии и Git
-Снимки SQLite перед правками; откат — **`file_versions_tool`**. Git — **`git_ops`**.
+Снимки SQLite перед правками; откат одного файла через модель — **`file_versions_tool`**, в classic также slash-команды `/versions` и `/rollback`. В **TUI** дополнительно откат **целого хода** диалога (кнопка у сообщения пользователя) восстанавливает файлы по снимкам сессии — см. [ARCHITECTURE.md](ARCHITECTURE.md) §8. Git — **`git_ops`**.
 
 ### Creator Mode
 Параллельные воркеры используют **тот же** список тулов, что и основной чат (в т.ч. компактные имена). Настройки: `wiki/EXTENDING.md` (`orchestration`, local/heavy).

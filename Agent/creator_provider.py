@@ -76,10 +76,11 @@ def _resolve_local_base_url(base_url: str) -> str:
     пробует добавить /v1 (стандарт для OpenAI-совместимых серверов).
     """
     url = base_url.rstrip("/")
-    # Если уже заканчивается на /v1 — оставить как есть
-    if url.endswith("/v1"):
+    # Уже нормализованный OpenAI/OpenWebUI путь.
+    if url.endswith("/v1") or url.endswith("/api") or url.endswith("/api/v1"):
         return url
-    return url
+    # Ollama / LM Studio обычно дают базу без /v1.
+    return url + "/v1"
 
 
 def get_local_llm(

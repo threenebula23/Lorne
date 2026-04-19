@@ -8,6 +8,12 @@ def set_project_root(root: Path | str) -> None:
     global _GLOBAL_PROJECT_ROOT
     _GLOBAL_PROJECT_ROOT = Path(root).expanduser().resolve()
 
+
+def get_project_root() -> Path:
+    """Текущий корень проекта (как у resolve_abs_path для относительных путей)."""
+    return _GLOBAL_PROJECT_ROOT if _GLOBAL_PROJECT_ROOT is not None else Path.cwd()
+
+
 def resolve_abs_path(path_str: str) -> Path:
     path = Path(path_str).expanduser()
     if path.is_absolute():

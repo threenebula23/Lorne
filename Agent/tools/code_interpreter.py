@@ -14,7 +14,8 @@ from langchain_core.tools import tool
 def code_interpreter(code: str, timeout: int = 30) -> Dict[str, Any]:
     """Выполняет произвольный Python-код и возвращает stdout/stderr.
     Используй для вычислений, обработки данных, проверки алгоритмов.
-    Код запускается в отдельном процессе. Доступны стандартные библиотеки.
+    Код запускается в отдельном процессе; stdin закрыт — input() даст EOF, не ожидай интерактивного ввода.
+    Доступны стандартные библиотеки.
     """
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as tmp:
         tmp.write(code)
@@ -26,6 +27,7 @@ def code_interpreter(code: str, timeout: int = 30) -> Dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
         return {
             "stdout": result.stdout,

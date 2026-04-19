@@ -41,7 +41,20 @@ try:
         reload_tools, get_custom_tools_prompt,
     )
     from .rag import index_documents
-    from .checkpoint import create_session, delete_session, list_sessions, load_state, save_state
+    from .checkpoint import (
+        create_session,
+        delete_session,
+        list_sessions,
+        load_state,
+        save_state,
+        save_pre_turn_snapshot,
+        load_pre_turn_snapshot,
+        delete_turn_snapshots_from,
+        save_pre_turn_workspace_snapshot,
+        restore_turn_workspace,
+        delete_turn_workspace_snapshots_from,
+        messages_from_stored_dicts,
+    )
     from .graph_runner import AgentGraph
     from .message_utils import sanitize_messages, compact_conversation
     from .spinner import LiveSpinner
@@ -52,7 +65,20 @@ except ImportError:
         reload_tools, get_custom_tools_prompt,
     )
     from Agent.rag import index_documents
-    from Agent.checkpoint import create_session, delete_session, list_sessions, load_state, save_state
+    from Agent.checkpoint import (
+        create_session,
+        delete_session,
+        list_sessions,
+        load_state,
+        save_state,
+        save_pre_turn_snapshot,
+        load_pre_turn_snapshot,
+        delete_turn_snapshots_from,
+        save_pre_turn_workspace_snapshot,
+        restore_turn_workspace,
+        delete_turn_workspace_snapshots_from,
+        messages_from_stored_dicts,
+    )
     from Agent.graph_runner import AgentGraph
     from Agent.message_utils import sanitize_messages, compact_conversation
     from Agent.spinner import LiveSpinner
@@ -76,15 +102,17 @@ except ImportError:
 try:
     from .llm_provider import (
         get_llm, get_available_profiles, normalize_profile,
-        AVAILABLE_MODELS, set_model, get_saved_model,
+        get_available_models, set_model, get_saved_model,
         fetch_openrouter_credits, format_credits_info,
+        unload_ollama_models,
         is_reasoning_model,
     )
 except ImportError:
     from Agent.llm_provider import (
         get_llm, get_available_profiles, normalize_profile,
-        AVAILABLE_MODELS, set_model, get_saved_model,
+        get_available_models, set_model, get_saved_model,
         fetch_openrouter_credits, format_credits_info,
+        unload_ollama_models,
         is_reasoning_model,
     )
 
@@ -155,16 +183,20 @@ def _sync_tui_tool_bundle(is_agent: bool) -> None:
     """Пересобрать глобальный список тулов: в Agent — Node browser; Python Playwright — только из настроек."""
     global tools
     pw = False
+    bw = True
     if is_agent:
         try:
             from Interface.ui_prefs import load_prefs
-            pw = bool(load_prefs().get("playwright_python_enabled", False))
+            prefs = load_prefs()
+            pw = bool(prefs.get("playwright_python_enabled", False))
+            bw = bool(prefs.get("browser_tools_enabled", True))
         except Exception:
             pw = False
+            bw = True
     try:
         from Agent.tool_registry import set_tool_session_prefs, build_tools
-        set_tool_session_prefs(agent_mode=is_agent, playwright_python=pw)
-        fresh, _cust = build_tools(agent_mode=is_agent, playwright_python=pw)
+        set_tool_session_prefs(agent_mode=is_agent, playwright_python=pw, browser_tools=bw)
+        fresh, _cust = build_tools(agent_mode=is_agent, playwright_python=pw, browser_tools=bw)
         tools.clear()
         tools.extend(fresh)
         _refresh_runtime_tools()
@@ -342,8 +374,14 @@ def run_coding_agent_loop():
     project_structure = analyze_project_structure()
 
     custom_tools_section = get_custom_tools_prompt()
+    tool_names = sorted(str(getattr(t, "name", "")) for t in tools if getattr(t, "name", ""))
+    tool_names_block = ", ".join(tool_names)
     enhanced_system_prompt = f"""{SYSTEM_PROMPT}
 {custom_tools_section}
+
+=== ДОСТУПНЫЕ ИМЕНА ИНСТРУМЕНТОВ (ТОЛЬКО ИХ МОЖНО ВЫЗЫВАТЬ) ===
+{tool_names_block}
+Не выдумывай имена вроде create_file: если нужно создать файл, используй write_file или code_file_tool(action="create").
 
 === КОНТЕКСТ ПРОЕКТА ===
 {project_structure}
@@ -566,7 +604,7 @@ def run_coding_agent_loop():
         "analyze_project_structure": analyze_project_structure,
         "init_llm": _init_llm,
         "get_available_profiles": get_available_profiles,
-        "AVAILABLE_MODELS": AVAILABLE_MODELS,
+        "AVAILABLE_MODELS": get_available_models(),
         "set_model": set_model,
         "fetch_openrouter_credits": fetch_openrouter_credits,
         "format_credits_info": format_credits_info,
@@ -686,6 +724,31 @@ def run_coding_agent_loop():
         _run_and_render(old_len)
 
 
+def _tui_generate_session_title(first_user_text: str) -> str:
+    """Короткое название чата по первому запросу (один вызов LLM)."""
+    global llm
+    if not llm or not (first_user_text or "").strip():
+        return ""
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        out = llm.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "Ответь одной строкой: краткое название чата на русском, до 60 символов, "
+                        "без кавычек. Только заголовок."
+                    )
+                ),
+                HumanMessage(content=first_user_text.strip()[:4000]),
+            ]
+        )
+        t = str(getattr(out, "content", "") or "").strip().split("\n")[0][:80]
+        return t
+    except Exception:
+        return ""
+
+
 def run_tui_mode():
     """Launch TCA in full-screen Textual TUI mode."""
     try:
@@ -725,8 +788,14 @@ def run_tui_mode():
     project_structure = analyze_project_structure()
 
     custom_tools_section = get_custom_tools_prompt()
+    tool_names = sorted(str(getattr(t, "name", "")) for t in tools if getattr(t, "name", ""))
+    tool_names_block = ", ".join(tool_names)
     enhanced_system_prompt = f"""{SYSTEM_PROMPT}
 {custom_tools_section}
+
+=== ДОСТУПНЫЕ ИМЕНА ИНСТРУМЕНТОВ (ТОЛЬКО ИХ МОЖНО ВЫЗЫВАТЬ) ===
+{tool_names_block}
+Не выдумывай имена вроде create_file: если нужно создать файл, используй write_file или code_file_tool(action="create").
 
 === КОНТЕКСТ ПРОЕКТА ===
 {project_structure}
@@ -736,8 +805,9 @@ def run_tui_mode():
 Используй rag_search для поиска по документам. Для записи рассуждений в панель — reasoning_tool(action='think', thought='...').
 """
 
-    session_id = create_session("tui-session")
-    messages: List[Any] = [SystemMessage(content=enhanced_system_prompt)]
+    session_id = ""
+    messages: List[Any] = []
+    title_flag = [False]
 
     try:
         set_project_root(Path.cwd())
@@ -755,9 +825,69 @@ def run_tui_mode():
     creator_mode_active = [False]
     research_mode_active = [False]
     tui_agent_mode = ["normal"]
+    bridge_ref: List[Any] = [None]
 
-    def handle_chat_submit(text: str):
-        """Called from TUI when user sends a chat message (already in bg thread via Textual)."""
+    def apply_session_pick(result: dict) -> None:
+        nonlocal session_id, messages, title_flag
+        if result.get("action") == "new":
+            session_id = create_session("")
+            messages.clear()
+            messages.append(SystemMessage(content=enhanced_system_prompt))
+            title_flag[0] = False
+        elif result.get("action") == "open":
+            session_id = str(result.get("session_id", ""))
+            messages.clear()
+            raw = load_state(session_id) if session_id else None
+            if raw:
+                try:
+                    messages.extend(messages_from_stored_dicts(raw, enhanced_system_prompt))
+                except Exception:
+                    messages.append(SystemMessage(content=enhanced_system_prompt))
+            else:
+                messages.append(SystemMessage(content=enhanced_system_prompt))
+            title_flag[0] = True
+        br = bridge_ref[0]
+        if br:
+            br.on_chat_reload_messages(list(messages))
+
+    def handle_rollback(turn_index: int) -> None:
+        def _work() -> None:
+            nonlocal messages
+            try:
+                if not session_id:
+                    return
+                raw = load_pre_turn_snapshot(session_id, turn_index)
+                if not raw:
+                    br = bridge_ref[0]
+                    if br:
+                        br.on_error("Снимок для отката не найден")
+                    return
+                ws = restore_turn_workspace(session_id, turn_index)
+                messages.clear()
+                messages.extend(messages_from_stored_dicts(raw, enhanced_system_prompt))
+                delete_turn_snapshots_from(session_id, turn_index)
+                delete_turn_workspace_snapshots_from(session_id, turn_index)
+                save_state(messages, session_id=session_id)
+                br = bridge_ref[0]
+                if br:
+                    br.on_chat_reload_messages(list(messages))
+                    if isinstance(ws, dict) and ws.get("ok"):
+                        rf = int(ws.get("restored_files") or 0)
+                        dn = int(ws.get("deleted_new_files") or 0)
+                        br.on_info(f"Файлы: восстановлено версий {rf}, удалено новых файлов {dn}")
+                    try:
+                        br.on_file_changed("")
+                    except Exception:
+                        pass
+            except Exception as e:
+                br = bridge_ref[0]
+                if br:
+                    br.on_error(f"Откат: {e}")
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def handle_chat_submit(text: str, bubble_text: Optional[str] = None):
+        """Called from TUI when user sends a chat message (bubble_text — текст в пузыре без префиксов)."""
         nonlocal messages
 
         if not text.strip():
@@ -779,7 +909,7 @@ def run_tui_mode():
                     "analyze_project_structure": analyze_project_structure,
                     "init_llm": _init_llm,
                     "get_available_profiles": get_available_profiles,
-                    "AVAILABLE_MODELS": AVAILABLE_MODELS,
+                    "AVAILABLE_MODELS": get_available_models(),
                     "set_model": set_model,
                     "fetch_openrouter_credits": fetch_openrouter_credits,
                     "format_credits_info": format_credits_info,
@@ -816,7 +946,20 @@ def run_tui_mode():
                         + text
                     )
 
+                display_plain = ((bubble_text or "").strip() or text)
+
+                user_turn_idx = sum(1 for m in messages if isinstance(m, HumanMessage))
+                try:
+                    save_pre_turn_snapshot(session_id, user_turn_idx, list(messages))
+                    save_pre_turn_workspace_snapshot(session_id, user_turn_idx)
+                except Exception:
+                    pass
+
                 messages.append(HumanMessage(content=human_content))
+                try:
+                    bridge.on_chat_user_message(display_plain, user_turn_idx)
+                except Exception:
+                    pass
                 bridge.on_separator("Round")
 
                 if mode == "creator":
@@ -842,6 +985,22 @@ def run_tui_mode():
                         bridge.on_error(f"Creator error: {ce}")
                     finally:
                         bridge.on_agent_done()
+                    try:
+                        save_state(messages, session_id=session_id)
+                        if not title_flag[0]:
+                            n_h = sum(1 for m in messages if isinstance(m, HumanMessage))
+                            if n_h >= 1:
+                                first_u = ""
+                                for m in messages:
+                                    if isinstance(m, HumanMessage):
+                                        first_u = str(m.content or "")
+                                        break
+                                tit = _tui_generate_session_title(first_u)
+                                if tit:
+                                    save_state(messages, session_id=session_id, title=tit)
+                                    title_flag[0] = True
+                    except Exception:
+                        pass
                 else:
                     _tui_run(len(messages), messages, bridge)
 
@@ -885,16 +1044,26 @@ def run_tui_mode():
                             bridge_ref.on_context_update(total_used, CONTEXT_LIMIT)
 
                         content = str(msg.content or "").strip()
-                        if content and not getattr(msg, "tool_calls", None):
-                            usage_out: Dict[str, Any] = {}
-                            if isinstance(usage, dict):
-                                inp = usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
-                                out = usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
-                                if inp or out:
-                                    usage_out = {
-                                        "prompt_tokens": int(inp),
-                                        "completion_tokens": int(out),
-                                    }
+                        usage_out: Dict[str, Any] = {}
+                        if isinstance(usage, dict):
+                            inp = usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
+                            out = usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
+                            if inp or out:
+                                usage_out = {
+                                    "prompt_tokens": int(inp),
+                                    "completion_tokens": int(out),
+                                }
+                        if content:
+                            try:
+                                from Agent.message_utils import extract_thought_segments
+                                segs, content = extract_thought_segments(content)
+                            except Exception:
+                                segs, content = [], content
+                            for th in segs:
+                                if (th or "").strip():
+                                    bridge_ref.on_thought(th.strip())
+                            content = (content or "").strip()
+                        if content:
                             bridge_ref.on_model_reply(content, usage_out or None)
                 old_len = len(msgs)
         except Exception as e:
@@ -906,6 +1075,18 @@ def run_tui_mode():
 
         try:
             save_state(msgs, session_id=session_id)
+            if not title_flag[0]:
+                n_h = sum(1 for m in msgs if isinstance(m, HumanMessage))
+                if n_h >= 1:
+                    first_u = ""
+                    for m in msgs:
+                        if isinstance(m, HumanMessage):
+                            first_u = str(m.content or "")
+                            break
+                    tit = _tui_generate_session_title(first_u)
+                    if tit:
+                        save_state(msgs, session_id=session_id, title=tit)
+                        title_flag[0] = True
         except Exception:
             pass
 
@@ -935,6 +1116,24 @@ def run_tui_mode():
         research_mode_active[0] = mode_lower == "research"
         try:
             _sync_tui_tool_bundle(mode_lower == "agent")
+        except Exception:
+            pass
+
+    def handle_app_close() -> None:
+        """Called when TUI is closing: best-effort unload of running Ollama models."""
+        try:
+            stats = unload_ollama_models(
+                base_url=os.getenv("OLLAMA_BASE_URL", ""),
+                api_key=os.getenv("OLLAMA_API_KEY", ""),
+            )
+            if isinstance(stats, dict) and int(stats.get("running") or 0) > 0:
+                try:
+                    bridge.on_info(
+                        "Ollama unload: "
+                        f"{int(stats.get('unloaded') or 0)}/{int(stats.get('running') or 0)}",
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
         try:
@@ -970,12 +1169,16 @@ def run_tui_mode():
     app = TCAApp(
         model_name=MODEL_NAME,
         branch=git_branch,
-        models=AVAILABLE_MODELS,
+        models=get_available_models(),
         on_chat_submit=handle_chat_submit,
         on_model_change=handle_model_change,
         on_mode_toggle=handle_mode_toggle,
+        on_session_resolved=apply_session_pick,
+        on_chat_rollback=handle_rollback,
+        on_app_close=handle_app_close,
     )
     bridge = TUIBridge(app)
+    bridge_ref[0] = bridge
     app.set_bridge(bridge)
     set_bridge(bridge)
 

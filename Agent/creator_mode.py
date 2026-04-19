@@ -47,6 +47,40 @@ except ImportError:
     from Agent.system_promt import SYSTEM_PROMPT
 
 try:
+    from .message_utils import (
+        coalesce_lc_response_tool_calls,
+        coerce_assistant_content_to_text,
+        extract_textual_tool_calls,
+        extract_structured_tool_calls,
+        normalize_tool_call,
+        summarize_tool_like_final_answer,
+    )
+except ImportError:
+    from Agent.message_utils import (
+        coalesce_lc_response_tool_calls,
+        coerce_assistant_content_to_text,
+        extract_textual_tool_calls,
+        extract_structured_tool_calls,
+        normalize_tool_call,
+        summarize_tool_like_final_answer,
+    )
+
+try:
+    from .tool_registry import bind_tools_safe
+except ImportError:
+    from Agent.tool_registry import bind_tools_safe
+
+try:
+    from .message_utils import reconstruct_broken_content
+except ImportError:
+    from Agent.message_utils import reconstruct_broken_content
+
+try:
+    from .tool_schemas import validate_tool_arguments
+except ImportError:
+    from Agent.tool_schemas import validate_tool_arguments
+
+try:
     from Interface.graph_display import (
         WorkerInfo, GraphLiveDisplay, display_creator_result,
     )
@@ -81,10 +115,7 @@ def _build_worker_graph(
         if name:
             tool_map[str(name)] = t
 
-    try:
-        llm_with_tools = llm.bind_tools(tools)
-    except Exception:
-        llm_with_tools = llm.bind_tools(tools)
+    llm_with_tools = bind_tools_safe(llm, model_name, tools)
 
     def call_model(state: MessagesState) -> Dict[str, List[AIMessage]]:
         messages = state["messages"]
@@ -93,15 +124,35 @@ def _build_worker_graph(
         except Exception as e:
             return {"messages": [AIMessage(content=f"Ошибка: {e}")]}
 
-        content = response.content or ""
+        content = coerce_assistant_content_to_text(getattr(response, "content", ""))
         if isinstance(content, str):
             content = content.encode("utf-8", "ignore").decode("utf-8", "ignore")
         meta = getattr(response, "response_metadata", None) or {}
 
-        if getattr(response, "tool_calls", None):
+        merged = coalesce_lc_response_tool_calls(response)
+        if merged:
             return {"messages": [AIMessage(
-                content=content, tool_calls=response.tool_calls, response_metadata=meta,
+                content=content, tool_calls=merged, response_metadata=meta,
             )]}
+
+        structured_tool_calls = extract_structured_tool_calls(content)
+        if structured_tool_calls:
+            return {"messages": [AIMessage(
+                content="",
+                tool_calls=structured_tool_calls,
+                response_metadata=meta,
+            )]}
+        textual_tool_calls, body = extract_textual_tool_calls(content)
+        if textual_tool_calls:
+            return {"messages": [AIMessage(
+                content=body or "", tool_calls=textual_tool_calls, response_metadata=meta,
+            )]}
+        if isinstance(content, str):
+            recent_tool_ctx = any(isinstance(m, ToolMessage) for m in messages[-4:])
+            if recent_tool_ctx:
+                humanized = summarize_tool_like_final_answer(content)
+                if humanized:
+                    content = humanized
         return {"messages": [AIMessage(content=content, response_metadata=meta)]}
 
     def execute_tools(state: MessagesState) -> Dict[str, List[Any]]:
@@ -109,23 +160,23 @@ def _build_worker_graph(
         tool_calls = getattr(last, "tool_calls", None) or []
         results = []
         for tc in tool_calls:
-            tc_dict = tc if isinstance(tc, dict) else {
-                "name": getattr(tc, "name", ""),
-                "args": getattr(tc, "args", {}),
-                "id": getattr(tc, "id", ""),
-            }
+            tc_dict = normalize_tool_call(tc)
             tool_name = str(tc_dict.get("name", ""))
-            tool_args = tc_dict.get("args", {}) or {}
+            tool_args = reconstruct_broken_content(tool_name, tc_dict.get("args", {}) or {})
             tool_call_id = str(tc_dict.get("id", f"call_{hash(tool_name)}"))
 
             tool_obj = tool_map.get(tool_name)
             if tool_obj is None:
                 result = f"Unknown tool: {tool_name}"
             else:
-                try:
-                    result = tool_obj.invoke(tool_args)
-                except Exception as e:
-                    result = f"Error: {e}"
+                tool_args, val_err = validate_tool_arguments(tool_name, tool_args)
+                if val_err:
+                    result = {"error": "argument_validation", "detail": val_err}
+                else:
+                    try:
+                        result = tool_obj.invoke(tool_args)
+                    except Exception as e:
+                        result = f"Error: {e}"
 
             content_str = json.dumps(result, ensure_ascii=False, default=str) if isinstance(result, (dict, list)) else str(result)
             # Truncate for context saving

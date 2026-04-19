@@ -12,6 +12,26 @@ DEFAULT_PREFS: Dict[str, Any] = {
     "accent_color": "#8B5CF6",
     # В режиме Agent: подключать Python Playwright (Chromium), если True — см. Settings.
     "playwright_python_enabled": False,
+    # В режиме Agent: включать браузерные Node-tools (headless browser layer).
+    "browser_tools_enabled": True,
+    # Пользовательские модели для селектора (хранятся в проекте).
+    "openrouter_custom_models": [],
+    "ollama_custom_models": [],
+    # Настройки подключения Ollama.
+    "ollama_base_url": "http://localhost:11434/v1",
+    "ollama_api_key": "",
+    "ollama_presets": {
+        "default": {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 40,
+            "repeat_penalty": 1.1,
+            "num_ctx": 32768,
+            "num_predict": 2048,
+            "stop": "",
+        }
+    },
+    "ollama_model_settings": {},
 }
 
 

@@ -26,6 +26,9 @@ def run_command(
         "timeout": timeout,
         "cwd": str(cwd_path) if cwd_path else None,
         "env": env,
+        # Do not inherit stdin: scripts using input() or prompts would block on TTY.
+        # DEVNULL yields immediate EOF on read so the process exits or errors; output still captured.
+        "stdin": subprocess.DEVNULL,
     }
     if IS_WINDOWS:
         run_kwargs["shell"] = False
@@ -64,7 +67,11 @@ def run_command_safe(
     except subprocess.TimeoutExpired:
         return {
             "stdout": "",
-            "stderr": f"Command timed out after {timeout}s.",
+            "stderr": (
+                f"Command timed out after {timeout}s. "
+                "If the program was waiting for input or a pager, use non-interactive flags or pipe answers; "
+                "stdin is not connected to a TTY."
+            ),
             "returncode": -1,
             "error": "TimeoutExpired",
         }

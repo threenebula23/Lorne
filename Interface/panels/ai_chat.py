@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import os
+import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from rich.markdown import Markdown
+
 from rich.text import Text
 
 from textual import on
@@ -16,7 +19,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, DirectoryTree, Input, Label, RichLog, Select, Static, TextArea,
+    Button, Checkbox, DirectoryTree, Input, Label, RichLog, Select, Static, TextArea,
 )
 
 try:
@@ -26,10 +29,16 @@ except ImportError:  # pragma: no cover
 
 
 class ChatSubmitted(Message):
-    def __init__(self, text: str, image_paths: Optional[List[Path]] = None) -> None:
+    def __init__(
+        self,
+        text: str,
+        image_paths: Optional[List[Path]] = None,
+        bubble_text: Optional[str] = None,
+    ) -> None:
         super().__init__()
         self.text = text
         self.image_paths = list(image_paths or [])
+        self.bubble_text = (bubble_text if bubble_text is not None else text)
 
 
 class ModelChanged(Message):
@@ -46,6 +55,14 @@ class ModeToggled(Message):
 
 class StopRequested(Message):
     pass
+
+
+class RollbackRequested(Message):
+    """Откат диалога к снимку до указанного пользовательского хода (индекс с нуля)."""
+
+    def __init__(self, turn_index: int) -> None:
+        super().__init__()
+        self.turn_index = int(turn_index)
 
 
 class ChatFilePickerScreen(ModalScreen[Optional[Path]]):
@@ -192,6 +209,27 @@ MARKDOWN_SYNTAX_THEME_MAP = {
     "solarized_light": "solarized-light",
 }
 
+_SYNTAX_OPTIONS = [
+    ("Monokai", "monokai"),
+    ("Dracula", "dracula"),
+    ("GitHub Dark", "github_dark"),
+    ("GitHub Light", "github_light"),
+    ("VS Dark", "vs_dark"),
+    ("Nord", "nord"),
+    ("One Dark", "one_dark"),
+    ("One Light", "one_light"),
+    ("Material", "material"),
+    ("Zenburn", "zenburn"),
+    ("Solarized Dark", "solarized_dark"),
+    ("Solarized Light", "solarized_light"),
+]
+
+_ACCENT_COLORS = [
+    "#8B5CF6", "#A78BFA", "#7C3AED", "#6366F1", "#3B82F6", "#06B6D4", "#10B981", "#22C55E",
+    "#84CC16", "#EAB308", "#F59E0B", "#F97316", "#EF4444", "#EC4899", "#D946EF", "#14B8A6",
+    "#0EA5E9", "#2563EB", "#4F46E5", "#9333EA", "#DB2777", "#DC2626", "#111827", "#FFFFFF",
+]
+
 _WRITE_TOOLS = frozenset({
     "edit_file", "write_file", "replace_file_lines", "insert_file_lines",
     "create_code_file", "append_code_snippet",
@@ -200,6 +238,23 @@ _WRITE_TOOLS = frozenset({
 _WEB_TOOLS = frozenset({"web_search", "web_fetch", "web_search_and_read"})
 
 _CHAT_IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
+
+def _split_thoughts_and_body(text: str) -> tuple[list[str], str]:
+    """Извлекает блоки рассуждений (как в graph_runner / message_utils)."""
+    try:
+        from Agent.message_utils import extract_thought_segments
+        return extract_thought_segments(text or "")
+    except Exception:
+        thoughts: list[str] = []
+
+        def _sub(m: re.Match) -> str:
+            inner = (m.group(1) or "").strip()
+            if inner:
+                thoughts.append(inner)
+            return ""
+
+        body = re.compile(r"<thought>([\s\S]*?)</thought>", re.IGNORECASE).sub(_sub, text or "")
+        return thoughts, (body or "").strip()
 
 
 def _format_path_for_chip(full_path: str, max_len: int = 58) -> str:
@@ -303,15 +358,43 @@ class UserMessageBlock(Vertical):
         background: #1a1528;
         border-left: outer #8B5CF6;
     }
+    UserMessageBlock .user-rollback-row {
+        height: auto;
+        margin-top: 1;
+    }
+    UserMessageBlock .user-rollback-row Button {
+        min-width: 28;
+    }
     """
 
-    def __init__(self, text: str, **kwargs) -> None:
+    def __init__(self, text: str, turn_index: int = -1, **kwargs) -> None:
         super().__init__(**kwargs)
         self._text = text
+        self._turn_index = int(turn_index)
 
     def compose(self) -> ComposeResult:
         yield Static(Text("Вы", style=f"bold {PURPLE_LIGHT}"))
         yield Static(Text(self._text, style="#E5E7EB"))
+        if self._turn_index >= 0:
+            with Horizontal(classes="user-rollback-row"):
+                yield Button(
+                    "Откат к состоянию до этого запроса",
+                    id=f"rollback-btn-{self._turn_index}",
+                    variant="warning",
+                )
+
+    @on(Button.Pressed)
+    def _on_rollback_press(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid.startswith("rollback-btn-"):
+            try:
+                idx = int(bid.replace("rollback-btn-", "", 1))
+            except ValueError:
+                return
+            try:
+                self.app.post_message(RollbackRequested(idx))
+            except Exception:
+                self.post_message(RollbackRequested(idx))
 
 
 class AIChatPanel(Vertical):
@@ -441,6 +524,36 @@ class AIChatPanel(Vertical):
     #stop-btn.visible {
         display: block;
     }
+    #custom-models-line {
+        height: auto;
+        min-height: 1;
+        color: #6B7280;
+        margin: 0 0 1 0;
+    }
+    .settings-row {
+        height: auto;
+        layout: horizontal;
+        margin: 0 0 1 0;
+    }
+    .settings-row-label {
+        width: 26;
+        max-width: 28;
+        content-align: left middle;
+    }
+    .settings-row Input, .settings-row Select {
+        width: 1fr;
+        min-width: 14;
+    }
+    #sor-balance-display {
+        height: auto;
+        min-height: 3;
+        color: #9CA3AF;
+    }
+    .settings-section-title {
+        color: #A78BFA;
+        text-style: bold;
+        margin: 1 0 0 0;
+    }
     .stream-line {
         height: auto;
         margin: 0 0 0 0;
@@ -487,13 +600,20 @@ class AIChatPanel(Vertical):
         try:
             from Interface.ui_prefs import load_prefs
             from Interface.themes import SYNTAX_THEME_MAP, ensure_custom_textarea_themes
+            prefs = load_prefs()
+            if prefs.get("ollama_base_url"):
+                os.environ.setdefault("OLLAMA_BASE_URL", str(prefs.get("ollama_base_url")))
+            if prefs.get("ollama_api_key"):
+                os.environ.setdefault("OLLAMA_API_KEY", str(prefs.get("ollama_api_key")))
             ta = self.query_one("#chat-input", TextArea)
             ensure_custom_textarea_themes(ta)
             ta.theme = SYNTAX_THEME_MAP.get(
-                str(load_prefs().get("syntax_theme", "monokai")), "monokai",
+                str(prefs.get("syntax_theme", "monokai")), "monokai",
             )
         except Exception:
             pass
+        self._load_extra_models_from_prefs()
+        self._update_custom_models_line()
         self._refresh_context_meter()
 
     def _main_stream(self) -> VerticalScroll:
@@ -565,11 +685,329 @@ class AIChatPanel(Vertical):
             Button("Стоп", id="stop-btn"),
             id="chat-controls",
         ))
+        area.mount(Static("", id="custom-models-line"))
         area.mount(Label(
             "Ctrl+Enter — отправить  ·  Enter — новая строка  ·  до 12 строк с прокруткой",
             id="chat-input-hint",
             classes="chat-input-hint",
         ))
+
+    @staticmethod
+    def _settings_row(content: VerticalScroll, label: str, widget) -> None:
+        content.mount(Horizontal(
+            Label(label, classes="settings-row-label"),
+            widget,
+            classes="settings-row",
+        ))
+
+    def render_settings_into(self, scroll: VerticalScroll, section: str) -> None:
+        """Fill a workspace settings tab (widgets may live outside this panel)."""
+        sec = (section or "").strip().lower()
+        if sec not in {"personalization", "agents", "openrouter", "ollama"}:
+            sec = "personalization"
+        try:
+            scroll.remove_children()
+        except Exception:
+            for w in list(scroll.children):
+                w.remove()
+        self._render_settings_tab(sec, scroll)
+
+    def _render_settings_tab(self, tab: str, content: VerticalScroll) -> None:
+        if tab == "personalization":
+            self._render_personalization_settings(content)
+        elif tab == "agents":
+            self._render_agents_settings(content)
+        elif tab == "openrouter":
+            self._render_openrouter_settings(content)
+        elif tab == "ollama":
+            self._render_ollama_settings(content)
+
+    def _render_personalization_settings(self, content: VerticalScroll) -> None:
+        from Interface.ui_prefs import load_prefs
+        from Interface.themes import DARK_THEMES, LIGHT_THEMES
+
+        prefs = load_prefs()
+        theme_options = [(f"🌙 {t}", t) for t in DARK_THEMES] + [(f"☀️ {t}", t) for t in LIGHT_THEMES]
+        theme = str(prefs.get("theme", "Purple Dark"))
+        available_theme_ids = {t[1] for t in theme_options}
+        if theme not in available_theme_ids and theme_options:
+            theme = str(theme_options[0][1])
+        density = str(prefs.get("density", "normal"))
+        syntax = str(prefs.get("syntax_theme", "monokai"))
+        accent = str(prefs.get("accent_color", "#8B5CF6"))
+        content.mount(Label("Внешний вид интерфейса", classes="settings-section-title"))
+        self._settings_row(
+            content, "Тема",
+            Select(theme_options, value=theme, id="sp-theme", allow_blank=False),
+        )
+        self._settings_row(
+            content, "Плотность",
+            Select(
+                [("Компактный", "compact"), ("Обычный", "normal"), ("Крупный", "spacious")],
+                value=density if density in ("compact", "normal", "spacious") else "normal",
+                id="sp-density",
+                allow_blank=False,
+            ),
+        )
+        self._settings_row(
+            content, "Подсветка",
+            Select(_SYNTAX_OPTIONS, value=syntax, id="sp-syntax", allow_blank=False),
+        )
+        self._settings_row(
+            content, "Accent",
+            Input(value=accent, id="sp-accent", placeholder="#8B5CF6"),
+        )
+        content.mount(Horizontal(
+            Button("Применить цвет", id="sp-apply-accent", variant="primary"),
+            Button("Палитра", id="sp-open-palette", variant="default"),
+        ))
+
+    def _render_agents_settings(self, content: VerticalScroll) -> None:
+        from Interface.ui_prefs import load_prefs
+
+        prefs = load_prefs()
+        prof = os.getenv("TCA_PROFILE", "balanced").lower()
+        if prof not in ("fast", "balanced", "quality"):
+            prof = "balanced"
+        content.mount(Label("Профиль агента и специальные тулы", classes="settings-section-title"))
+        self._settings_row(
+            content, "Профиль TCA",
+            Select(
+                [("Fast", "fast"), ("Balanced", "balanced"), ("Quality", "quality")],
+                value=prof,
+                id="sa-profile",
+                allow_blank=False,
+            ),
+        )
+        self._settings_row(
+            content, "Browser tools",
+            Checkbox(
+                "Включить (headless) в Agent mode",
+                value=bool(prefs.get("browser_tools_enabled", True)),
+                id="sa-browser",
+            ),
+        )
+        self._settings_row(
+            content, "Playwright Py",
+            Checkbox(
+                "Включить Python Playwright в Agent mode",
+                value=bool(prefs.get("playwright_python_enabled", False)),
+                id="sa-playwright",
+            ),
+        )
+        content.mount(
+            Static(
+                "Изменения применяются для следующих запусков/сообщений в Agent mode.",
+            )
+        )
+
+    def _render_openrouter_settings(self, content: VerticalScroll) -> None:
+        from Interface.ui_prefs import load_prefs
+
+        prefs = load_prefs()
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        masked = api_key if len(api_key) <= 8 else api_key[:8] + "…"
+        content.mount(Label("OpenRouter", classes="settings-section-title"))
+        self._settings_row(
+            content, "API key",
+            Input(value=masked, password=True, id="sor-api-key", placeholder="sk-or-..."),
+        )
+        content.mount(Button("Сохранить API key", id="sor-save-key", variant="primary"))
+        content.mount(Label("Счёт OpenRouter", classes="settings-section-title"))
+        self._settings_row(
+            content, "Баланс",
+            Static(
+                "Введите ключ выше или сохраните его, затем нажмите «Проверить баланс».",
+                id="sor-balance-display",
+            ),
+        )
+        content.mount(Button("Проверить баланс", id="sor-check-balance", variant="default"))
+        self._settings_row(
+            content, "Model ID",
+            Input(id="sor-model-id", placeholder="provider/model-id"),
+        )
+        self._settings_row(
+            content, "Название",
+            Input(id="sor-model-name", placeholder="Например GPT-5 Mini"),
+        )
+        content.mount(Button("Добавить модель OpenRouter", id="sor-add-model", variant="success"))
+        content.mount(Static("", id="sor-status"))
+        lines = []
+        for m in (prefs.get("openrouter_custom_models") or []):
+            if isinstance(m, dict):
+                lines.append(f"- {m.get('name') or m.get('id')} [{m.get('id')}]")
+        content.mount(Static("Добавленные модели:\n" + ("\n".join(lines) if lines else "—"), id="sor-model-list"))
+
+    def _render_ollama_settings(self, content: VerticalScroll) -> None:
+        from Interface.ui_prefs import load_prefs
+
+        prefs = load_prefs()
+        base_url = str(prefs.get("ollama_base_url", "http://localhost:11434/v1"))
+        api_key = str(prefs.get("ollama_api_key", ""))
+        presets = prefs.get("ollama_presets") or {}
+        if not isinstance(presets, dict) or not presets:
+            presets = {
+                "default": {
+                    "temperature": 0.2,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "repeat_penalty": 1.1,
+                    "num_ctx": 32768,
+                    "num_predict": 2048,
+                    "stop": "",
+                }
+            }
+        preset_name = "default" if "default" in presets else next(iter(presets.keys()))
+        pv = presets.get(preset_name) if isinstance(presets.get(preset_name), dict) else {}
+        content.mount(Label("Ollama", classes="settings-section-title"))
+        self._settings_row(
+            content, "Base URL",
+            Input(value=base_url, id="sol-base-url", placeholder="http://localhost:11434/v1"),
+        )
+        self._settings_row(
+            content, "API key",
+            Input(value=api_key, id="sol-api-key", password=True, placeholder="optional"),
+        )
+        content.mount(Horizontal(
+            Button("Сохранить подключение", id="sol-save-conn", variant="primary"),
+            Button("Обновить список моделей", id="sol-refresh", variant="default"),
+        ))
+        self._settings_row(
+            content, "Модель",
+            Select([("— сначала нажмите «Обновить» —", "")], id="sol-model-select", allow_blank=False),
+        )
+        self._settings_row(
+            content, "Пресет",
+            Select(
+                [(str(k), str(k)) for k in presets.keys()],
+                value=str(preset_name),
+                id="sol-preset-select",
+                allow_blank=False,
+            ),
+        )
+        content.mount(Label("Параметры генерации", classes="settings-section-title"))
+        self._settings_row(
+            content, "temperature",
+            Input(value=str(pv.get("temperature", 0.2)), id="sol-param-temperature", placeholder="0.2"),
+        )
+        self._settings_row(
+            content, "top_p",
+            Input(value=str(pv.get("top_p", 0.9)), id="sol-param-top-p", placeholder="0.9"),
+        )
+        self._settings_row(
+            content, "top_k",
+            Input(value=str(pv.get("top_k", 40)), id="sol-param-top-k", placeholder="40"),
+        )
+        self._settings_row(
+            content, "repeat_penalty",
+            Input(value=str(pv.get("repeat_penalty", 1.1)), id="sol-param-repeat-penalty", placeholder="1.1"),
+        )
+        self._settings_row(
+            content, "num_ctx",
+            Input(value=str(pv.get("num_ctx", 32768)), id="sol-param-num-ctx", placeholder="32768"),
+        )
+        self._settings_row(
+            content, "num_predict",
+            Input(value=str(pv.get("num_predict", 2048)), id="sol-param-num-predict", placeholder="2048"),
+        )
+        self._settings_row(
+            content, "stop",
+            Input(value=str(pv.get("stop", "")), id="sol-param-stop", placeholder="через |"),
+        )
+        content.mount(Horizontal(
+            Button("Сохранить как пресет", id="sol-save-preset", variant="default"),
+            Button("Применить настройки к модели", id="sol-apply-model-settings", variant="primary"),
+        ))
+        content.mount(Button("Добавить выбранную Ollama модель", id="sol-add", variant="success"))
+        content.mount(Static("", id="sol-status"))
+        lines = []
+        for m in (prefs.get("ollama_custom_models") or []):
+            if isinstance(m, dict):
+                lines.append(f"- {m.get('label') or m.get('name')}")
+        content.mount(Static("Добавленные Ollama модели:\n" + ("\n".join(lines) if lines else "—"), id="sol-model-list"))
+
+    def _update_env_file(self, key: str, value: str) -> None:
+        p = Path.cwd() / ".env"
+        lines: List[str] = []
+        found = False
+        if p.exists():
+            for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.startswith(f"{key}="):
+                    lines.append(f"{key}={value}")
+                    found = True
+                else:
+                    lines.append(line)
+        if not found:
+            lines.append(f"{key}={value}")
+        p.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+    def _load_extra_models_from_prefs(self) -> None:
+        try:
+            from Interface.ui_prefs import load_prefs
+        except Exception:
+            return
+        prefs = load_prefs()
+        for m in (prefs.get("openrouter_custom_models") or []):
+            if isinstance(m, dict):
+                self.add_external_model(
+                    str(m.get("id") or ""),
+                    name=str(m.get("name") or ""),
+                    ctx=int(m.get("ctx") or 128_000),
+                    tier=str(m.get("tier") or "custom"),
+                    source="openrouter",
+                    activate=False,
+                )
+        for m in (prefs.get("ollama_custom_models") or []):
+            if isinstance(m, dict):
+                nm = str(m.get("name") or "")
+                if not nm:
+                    continue
+                self.add_external_model(
+                    f"ollama/{nm}",
+                    name=str(m.get("label") or f"Ollama · {nm}"),
+                    ctx=int(m.get("ctx") or 32_768),
+                    tier="local",
+                    source="ollama",
+                    activate=False,
+                )
+
+    def _update_custom_models_line(self) -> None:
+        try:
+            from Interface.ui_prefs import load_prefs
+            prefs = load_prefs()
+            total = len(prefs.get("openrouter_custom_models") or []) + len(prefs.get("ollama_custom_models") or [])
+            txt = f"Дополнительные модели: {total}" if total else ""
+            self.query_one("#custom-models-line", Static).update(txt)
+        except Exception:
+            pass
+
+    def _refresh_openrouter_list_view(self) -> None:
+        try:
+            from Interface.ui_prefs import load_prefs
+            prefs = load_prefs()
+            lines = []
+            for m in (prefs.get("openrouter_custom_models") or []):
+                if isinstance(m, dict):
+                    lines.append(f"- {m.get('name') or m.get('id')} [{m.get('id')}]")
+            self.app.query_one("#sor-model-list", Static).update(
+                "Добавленные модели:\n" + ("\n".join(lines) if lines else "—")
+            )
+        except Exception:
+            pass
+
+    def _refresh_ollama_list_view(self) -> None:
+        try:
+            from Interface.ui_prefs import load_prefs
+            prefs = load_prefs()
+            lines = []
+            for m in (prefs.get("ollama_custom_models") or []):
+                if isinstance(m, dict):
+                    lines.append(f"- {m.get('label') or m.get('name')}")
+            self.app.query_one("#sol-model-list", Static).update(
+                "Добавленные Ollama модели:\n" + ("\n".join(lines) if lines else "—")
+            )
+        except Exception:
+            pass
 
     def _rebuild_attachment_strip(self) -> None:
         try:
@@ -618,7 +1056,12 @@ class AIChatPanel(Vertical):
         try:
             ta = self.query_one("#chat-input", TextArea)
             hint = self.query_one("#chat-input-hint", Label)
-            for bid in ("#model-select", "#mode-select", "#send-btn", "#attach-file-btn"):
+            for bid in (
+                "#model-select",
+                "#mode-select",
+                "#send-btn",
+                "#attach-file-btn",
+            ):
                 try:
                     self.query_one(bid).disabled = bool(wid)
                 except Exception:
@@ -739,15 +1182,75 @@ class AIChatPanel(Vertical):
 
     # ─── Public API ────────────────────────────────
 
-    def add_user_message(self, text: str) -> None:
+    def add_user_message(self, text: str, turn_index: int = -1) -> None:
         self.reset_round_file_metrics()
         self.reset_round_web_sources()
-        self._mount_main(UserMessageBlock(text))
+        self._mount_main(UserMessageBlock(text, turn_index=turn_index))
+
+    def rebuild_from_langchain_messages(self, msgs: List[Any]) -> None:
+        """Перерисовать поток чата из списка LangChain-сообщений (после отката / загрузки сессии)."""
+        try:
+            from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+        except ImportError:
+            return
+
+        stream = self._main_stream()
+        for w in list(stream.children):
+            w.remove()
+        self._msg_seq = 0
+        self._lifetime_prompt = 0
+        self._lifetime_completion = 0
+        self._last_render_key = ""
+        hi = 0
+        for m in msgs:
+            if isinstance(m, SystemMessage):
+                continue
+            if isinstance(m, HumanMessage):
+                self._mount_main(UserMessageBlock(str(m.content or ""), turn_index=hi))
+                hi += 1
+            elif isinstance(m, AIMessage):
+                tcalls = getattr(m, "tool_calls", None) or []
+                for tc in tcalls:
+                    if isinstance(tc, dict):
+                        nm = str(tc.get("name", "") or "tool")
+                        args = tc.get("args", {})
+                        sm = ""
+                        if isinstance(args, dict) and args:
+                            sm = str(list(args.items())[0])[:120]
+                    else:
+                        nm = str(getattr(tc, "name", "") or "tool")
+                        sm = ""
+                    self.add_tool_message(nm, sm)
+                raw = str(m.content or "")
+                thoughts, body = _split_thoughts_and_body(raw)
+                for th in thoughts:
+                    self.add_thought(th, skip_dedup=True)
+                if tcalls:
+                    if body.strip():
+                        self._mount_main(
+                            Static(Text(body.strip(), style=DIM), classes="stream-line"),
+                        )
+                elif body.strip():
+                    self._msg_seq += 1
+                    mid = str(self._msg_seq)
+                    self._mount_main(
+                        AssistantMessageBlock(
+                            body.strip(),
+                            self._footer_for_assistant(None),
+                            mid,
+                        ),
+                    )
+            elif isinstance(m, ToolMessage):
+                body = str(m.content or "")[:240]
+                nm = getattr(m, "name", None) or "tool"
+                self.add_tool_result(str(nm), body)
+        if not any(isinstance(m, HumanMessage) for m in msgs):
+            self._add_welcome()
+        self._refresh_context_meter()
 
     def add_assistant_message(self, text: str, usage: Optional[Dict[str, Any]] = None) -> None:
-        self._msg_seq += 1
-        mid = str(self._msg_seq)
         text = self._append_web_sources_to_reply(text)
+        _, body = _split_thoughts_and_body(text)
         if usage:
             inp = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
             out = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
@@ -755,7 +1258,13 @@ class AIChatPanel(Vertical):
                 self._lifetime_prompt += max(0, inp)
                 self._lifetime_completion += max(0, out)
         footer = self._footer_for_assistant(usage)
-        block = AssistantMessageBlock(text, footer, mid)
+        if not (body or "").strip():
+            self.reset_round_file_metrics()
+            self._refresh_context_meter()
+            return
+        self._msg_seq += 1
+        mid = str(self._msg_seq)
+        block = AssistantMessageBlock(body, footer, mid)
         self._mount_main(block)
         self.reset_round_file_metrics()
         self._refresh_context_meter()
@@ -781,8 +1290,8 @@ class AIChatPanel(Vertical):
             msg.append(f"  {summary[:180]}", style=DIM)
         self._mount_main(Static(msg, classes="stream-line"))
 
-    def add_thought(self, text: str) -> None:
-        if self._is_duplicate_render(f"thought:{(text or '')[:120]}"):
+    def add_thought(self, text: str, *, skip_dedup: bool = False) -> None:
+        if not skip_dedup and self._is_duplicate_render(f"thought:{(text or '')[:120]}"):
             return
         for line in (text or "")[:2000].split("\n")[:40]:
             self._mount_main(Static(Text(f"· {line}", style=f"italic {DIM}"), classes="stream-line"))
@@ -958,7 +1467,7 @@ class AIChatPanel(Vertical):
         imgs = list(self._pending_images)
         self._pending_images.clear()
         self._rebuild_attachment_strip()
-        self.post_message(ChatSubmitted(text, imgs))
+        self.post_message(ChatSubmitted(text, imgs, bubble_text=text))
 
     def action_submit_chat(self) -> None:
         self._submit_chat_text()
@@ -1011,6 +1520,367 @@ class AIChatPanel(Vertical):
     def on_stop_click(self) -> None:
         self.post_message(StopRequested())
 
+    def on_apply_accent(self) -> None:
+        color = (self.app.query_one("#sp-accent", Input).value or "").strip()
+        if not color.startswith("#"):
+            self.notify("Цвет должен начинаться с #", severity="warning")
+            return
+        try:
+            from Interface.ui_prefs import save_prefs, load_prefs
+            from Interface.themes import apply_theme
+            save_prefs(accent_color=color)
+            apply_theme(self.app, str(load_prefs().get("theme", "Purple Dark")))
+            self.notify("Цвет обновлён")
+        except Exception as e:
+            self.notify(f"Accent error: {e}", severity="error")
+
+    def on_open_palette(self) -> None:
+        def _picked(color: Optional[str]) -> None:
+            if not color:
+                return
+            try:
+                inp = self.app.query_one("#sp-accent", Input)
+                inp.value = color
+            except Exception:
+                pass
+            try:
+                from Interface.ui_prefs import save_prefs, load_prefs
+                from Interface.themes import apply_theme
+                save_prefs(accent_color=color)
+                apply_theme(self.app, str(load_prefs().get("theme", "Purple Dark")))
+                self.notify("Цвет обновлён")
+            except Exception:
+                pass
+
+        self.app.push_screen(_AccentPaletteDialog(_ACCENT_COLORS, _picked))
+
+    def on_sp_theme(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        try:
+            from Interface.ui_prefs import save_prefs
+            from Interface.themes import apply_theme
+            theme_name = str(event.value)
+            save_prefs(theme=theme_name)
+            apply_theme(self.app, theme_name)
+        except Exception as e:
+            self.notify(f"Theme error: {e}", severity="error")
+
+    def on_sp_density(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        density = str(event.value)
+        for d in ("compact", "normal", "spacious"):
+            self.app.remove_class(f"density-{d}")
+        self.app.add_class(f"density-{density}")
+        try:
+            from Interface.ui_prefs import save_prefs
+            save_prefs(density=density)
+        except Exception:
+            pass
+
+    def on_sp_syntax(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        key = str(event.value)
+        theme_actual = MARKDOWN_SYNTAX_THEME_MAP.get(key, "monokai")
+        try:
+            from Interface.themes import ensure_custom_textarea_themes
+            from Interface.ui_prefs import save_prefs
+            for ta in self.app.query(TextArea):
+                ensure_custom_textarea_themes(ta)
+                ta.theme = theme_actual
+            save_prefs(syntax_theme=key)
+        except Exception:
+            pass
+
+    def on_sa_profile(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        os.environ["TCA_PROFILE"] = str(event.value)
+        self.notify(f"Профиль агента: {event.value}")
+
+    def on_sa_browser(self, event: Checkbox.Changed) -> None:
+        try:
+            from Interface.ui_prefs import save_prefs
+            save_prefs(browser_tools_enabled=bool(event.value))
+            self.notify("browser tools: " + ("ON" if event.value else "OFF"))
+        except Exception as e:
+            self.notify(f"Ошибка: {e}", severity="error")
+
+    def on_sa_playwright(self, event: Checkbox.Changed) -> None:
+        try:
+            from Interface.ui_prefs import save_prefs
+            save_prefs(playwright_python_enabled=bool(event.value))
+            self.notify("playwright tools: " + ("ON" if event.value else "OFF"))
+        except Exception as e:
+            self.notify(f"Ошибка: {e}", severity="error")
+
+    def on_sor_check_balance(self) -> None:
+        display = self.app.query_one("#sor-balance-display", Static)
+
+        def _resolve_key() -> str:
+            raw = (self.app.query_one("#sor-api-key", Input).value or "").strip()
+            if raw and not raw.endswith("…"):
+                return raw
+            return (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+
+        display.update("Запрос к OpenRouter…")
+
+        def _work() -> None:
+            key = _resolve_key()
+            if not key:
+                self.app.call_from_thread(
+                    display.update,
+                    "Нет ключа: введите API key в поле выше или сохраните его кнопкой «Сохранить API key».",
+                )
+                return
+            try:
+                from Agent.llm_provider import fetch_openrouter_credits, format_credits_info
+
+                creds = fetch_openrouter_credits(key)
+                if creds:
+                    self.app.call_from_thread(display.update, format_credits_info(creds))
+                else:
+                    self.app.call_from_thread(
+                        display.update,
+                        "Не удалось получить данные. Проверьте ключ и сеть.",
+                    )
+            except Exception as e:
+                self.app.call_from_thread(display.update, f"Ошибка: {e}")
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def on_sor_save_key(self) -> None:
+        key = (self.app.query_one("#sor-api-key", Input).value or "").strip()
+        if not key or key.endswith("…"):
+            self.notify("Введите новый OpenRouter API key", severity="warning")
+            return
+        os.environ["OPENROUTER_API_KEY"] = key
+        try:
+            self._update_env_file("OPENROUTER_API_KEY", key)
+            self.notify("OpenRouter API key сохранён")
+        except Exception as e:
+            self.notify(f"Ошибка: {e}", severity="error")
+
+    def on_sor_add_model(self) -> None:
+        model_id = (self.app.query_one("#sor-model-id", Input).value or "").strip()
+        custom_name = (self.app.query_one("#sor-model-name", Input).value or "").strip()
+        if not model_id:
+            self.notify("Укажите model id", severity="warning")
+            return
+        status = self.app.query_one("#sor-status", Static)
+        status.update("Загружаю метаданные OpenRouter…")
+
+        def _work() -> None:
+            try:
+                from Agent.llm_provider import fetch_openrouter_model_metadata
+                from Interface.ui_prefs import load_prefs, save_prefs
+
+                row = fetch_openrouter_model_metadata(model_id, os.environ.get("OPENROUTER_API_KEY", ""))
+                name = custom_name or str((row or {}).get("name") or model_id)
+                ctx = int((row or {}).get("context_length") or 128_000)
+                tier = "custom"
+                prefs = load_prefs()
+                cur = [m for m in (prefs.get("openrouter_custom_models") or []) if isinstance(m, dict)]
+                cur = [m for m in cur if str(m.get("id") or "") != model_id]
+                cur.append({"id": model_id, "name": name, "ctx": ctx, "tier": tier})
+                save_prefs(openrouter_custom_models=cur)
+                self.app.call_from_thread(
+                    self.add_external_model,
+                    model_id,
+                    name,
+                    ctx,
+                    tier,
+                    "openrouter",
+                    True,
+                )
+                self.app.call_from_thread(status.update, f"Добавлено: {name} ({ctx} ctx)")
+                self.app.call_from_thread(self._refresh_openrouter_list_view)
+                self.app.call_from_thread(self._update_custom_models_line)
+            except Exception as e:
+                self.app.call_from_thread(status.update, f"Ошибка: {e}")
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def on_sol_save_conn(self) -> None:
+        base = (self.app.query_one("#sol-base-url", Input).value or "").strip()
+        api = (self.app.query_one("#sol-api-key", Input).value or "").strip()
+        if not base:
+            self.notify("Введите base URL", severity="warning")
+            return
+        os.environ["OLLAMA_BASE_URL"] = base
+        os.environ["OLLAMA_API_KEY"] = api
+        try:
+            from Interface.ui_prefs import save_prefs
+            save_prefs(ollama_base_url=base, ollama_api_key=api)
+            self._update_env_file("OLLAMA_BASE_URL", base)
+            self._update_env_file("OLLAMA_API_KEY", api)
+            self.notify("Настройки Ollama сохранены")
+        except Exception as e:
+            self.notify(f"Ошибка: {e}", severity="error")
+
+    def _read_ollama_params_form(self) -> Dict[str, Any]:
+        def _f(id_: str, default: float) -> float:
+            try:
+                return float((self.app.query_one(id_, Input).value or "").strip())
+            except Exception:
+                return float(default)
+
+        def _i(id_: str, default: int) -> int:
+            try:
+                return int((self.app.query_one(id_, Input).value or "").strip())
+            except Exception:
+                return int(default)
+
+        stop_raw = ""
+        try:
+            stop_raw = (self.app.query_one("#sol-param-stop", Input).value or "").strip()
+        except Exception:
+            stop_raw = ""
+        return {
+            "temperature": _f("#sol-param-temperature", 0.2),
+            "top_p": _f("#sol-param-top-p", 0.9),
+            "top_k": _i("#sol-param-top-k", 40),
+            "repeat_penalty": _f("#sol-param-repeat-penalty", 1.1),
+            "num_ctx": _i("#sol-param-num-ctx", 32768),
+            "num_predict": _i("#sol-param-num-predict", 2048),
+            "stop": stop_raw,
+        }
+
+    def on_sol_preset_changed(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        try:
+            from Interface.ui_prefs import load_prefs
+            presets = load_prefs().get("ollama_presets") or {}
+            pv = presets.get(str(event.value), {}) if isinstance(presets, dict) else {}
+            if not isinstance(pv, dict):
+                return
+            self.app.query_one("#sol-param-temperature", Input).value = str(pv.get("temperature", 0.2))
+            self.app.query_one("#sol-param-top-p", Input).value = str(pv.get("top_p", 0.9))
+            self.app.query_one("#sol-param-top-k", Input).value = str(pv.get("top_k", 40))
+            self.app.query_one("#sol-param-repeat-penalty", Input).value = str(pv.get("repeat_penalty", 1.1))
+            self.app.query_one("#sol-param-num-ctx", Input).value = str(pv.get("num_ctx", 32768))
+            self.app.query_one("#sol-param-num-predict", Input).value = str(pv.get("num_predict", 2048))
+            self.app.query_one("#sol-param-stop", Input).value = str(pv.get("stop", ""))
+        except Exception:
+            pass
+
+    def on_sol_save_preset(self) -> None:
+        try:
+            from Interface.ui_prefs import load_prefs, save_prefs
+            preset_name = str(self.app.query_one("#sol-preset-select", Select).value or "default").strip() or "default"
+            prefs = load_prefs()
+            presets = prefs.get("ollama_presets") if isinstance(prefs.get("ollama_presets"), dict) else {}
+            presets[preset_name] = self._read_ollama_params_form()
+            save_prefs(ollama_presets=presets)
+            self.notify(f"Пресет сохранён: {preset_name}")
+        except Exception as e:
+            self.notify(f"Preset error: {e}", severity="error")
+
+    def on_sol_apply_model_settings(self) -> None:
+        try:
+            model_name = str(self.app.query_one("#sol-model-select", Select).value or "").strip()
+            if not model_name:
+                self.notify("Сначала выберите модель Ollama", severity="warning")
+                return
+            from Interface.ui_prefs import load_prefs, save_prefs
+            prefs = load_prefs()
+            mapping = prefs.get("ollama_model_settings") if isinstance(prefs.get("ollama_model_settings"), dict) else {}
+            mapping[model_name] = {
+                "preset": str(self.app.query_one("#sol-preset-select", Select).value or "default"),
+                **self._read_ollama_params_form(),
+            }
+            save_prefs(ollama_model_settings=mapping)
+            self.notify(f"Настройки применены к {model_name}")
+        except Exception as e:
+            self.notify(f"Model settings error: {e}", severity="error")
+
+    def on_sol_refresh(self) -> None:
+        status = self.app.query_one("#sol-status", Static)
+        status.update("Запрашиваю список Ollama моделей…")
+        base = (self.app.query_one("#sol-base-url", Input).value or "").strip()
+        api = (self.app.query_one("#sol-api-key", Input).value or "").strip()
+
+        def _work() -> None:
+            try:
+                from Agent.llm_provider import fetch_ollama_models
+                rows = fetch_ollama_models(base_url=base, api_key=api)
+                opts = [(f"{r.get('name')} (ctx {int(r.get('ctx') or 0):,})", str(r.get("name"))) for r in rows]
+                if not opts:
+                    opts = [("Модели не найдены", "")]
+
+                def _apply() -> None:
+                    sel = self.app.query_one("#sol-model-select", Select)
+                    sel.set_options(opts)
+                    if opts:
+                        sel.value = opts[0][1]
+                    status.update(f"Найдено моделей: {len(rows)}")
+
+                self.app.call_from_thread(_apply)
+            except Exception as e:
+                self.app.call_from_thread(status.update, f"Ошибка: {e}")
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def on_sol_model_select(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        model_name = str(event.value)
+        try:
+            from Interface.ui_prefs import load_prefs
+            prefs = load_prefs()
+            settings = prefs.get("ollama_model_settings") if isinstance(prefs.get("ollama_model_settings"), dict) else {}
+            ms = settings.get(model_name) if isinstance(settings.get(model_name), dict) else None
+            if not ms:
+                return
+            preset = str(ms.get("preset") or "default")
+            try:
+                self.app.query_one("#sol-preset-select", Select).value = preset
+            except Exception:
+                pass
+            self.app.query_one("#sol-param-temperature", Input).value = str(ms.get("temperature", 0.2))
+            self.app.query_one("#sol-param-top-p", Input).value = str(ms.get("top_p", 0.9))
+            self.app.query_one("#sol-param-top-k", Input).value = str(ms.get("top_k", 40))
+            self.app.query_one("#sol-param-repeat-penalty", Input).value = str(ms.get("repeat_penalty", 1.1))
+            self.app.query_one("#sol-param-num-ctx", Input).value = str(ms.get("num_ctx", 32768))
+            self.app.query_one("#sol-param-num-predict", Input).value = str(ms.get("num_predict", 2048))
+            self.app.query_one("#sol-param-stop", Input).value = str(ms.get("stop", ""))
+        except Exception:
+            pass
+
+    def on_sol_add(self) -> None:
+        try:
+            model_name = str(self.app.query_one("#sol-model-select", Select).value or "").strip()
+        except Exception:
+            model_name = ""
+        if not model_name:
+            self.notify("Сначала обновите и выберите модель", severity="warning")
+            return
+        from Interface.ui_prefs import load_prefs, save_prefs
+
+        prefs = load_prefs()
+        params = self._read_ollama_params_form()
+        selected_preset = str(self.app.query_one("#sol-preset-select", Select).value or "default")
+        cur = [m for m in (prefs.get("ollama_custom_models") or []) if isinstance(m, dict)]
+        cur = [m for m in cur if str(m.get("name") or "") != model_name]
+        model_ctx = int(params.get("num_ctx") or 32768)
+        cur.append({"name": model_name, "label": f"Ollama · {model_name}", "ctx": model_ctx})
+        mset = prefs.get("ollama_model_settings") if isinstance(prefs.get("ollama_model_settings"), dict) else {}
+        mset[model_name] = {"preset": selected_preset, **params}
+        save_prefs(ollama_custom_models=cur, ollama_model_settings=mset)
+        self.add_external_model(
+            f"ollama/{model_name}",
+            name=f"Ollama · {model_name}",
+            ctx=model_ctx,
+            tier="local",
+            source="ollama",
+            activate=True,
+        )
+        self._refresh_ollama_list_view()
+        self._update_custom_models_line()
+
     @on(Select.Changed, "#mode-select")
     def on_mode_change(self, event: Select.Changed) -> None:
         if not event.value or event.value == Select.BLANK:
@@ -1025,11 +1895,31 @@ class AIChatPanel(Vertical):
         if event.value and event.value != Select.BLANK:
             self.post_message(ModelChanged(str(event.value)))
 
-    def add_external_model(self, model_id: str) -> None:
-        short = model_id.split("/")[-1] if "/" in model_id else model_id
+    def add_external_model(
+        self,
+        model_id: str,
+        name: str = "",
+        ctx: int = 0,
+        tier: str = "custom",
+        source: str = "custom",
+        activate: bool = True,
+    ) -> None:
+        if not model_id:
+            return
+        if any(str(m.get("id") or "") == model_id for m in self._models):
+            if activate:
+                try:
+                    self.query_one("#model-select", Select).value = model_id
+                    self.post_message(ModelChanged(model_id))
+                except Exception:
+                    pass
+            return
+        short = name or (model_id.split("/")[-1] if "/" in model_id else model_id)
         if len(short) > 25:
             short = short[:22] + "…"
-        self._models.append({"name": short, "id": model_id})
+        self._models.append(
+            {"name": short, "id": model_id, "ctx": int(ctx or 0), "tier": tier, "source": source}
+        )
         model_options = []
         for m in self._models:
             name = m.get("name", m.get("id", "?"))
@@ -1041,7 +1931,74 @@ class AIChatPanel(Vertical):
         try:
             sel = self.query_one("#model-select", Select)
             sel.set_options(model_options)
-            sel.value = model_id
-            self.post_message(ModelChanged(model_id))
+            if activate:
+                sel.value = model_id
+                self.post_message(ModelChanged(model_id))
         except Exception:
             pass
+
+
+class _AccentPaletteDialog(ModalScreen):
+    DEFAULT_CSS = """
+    _AccentPaletteDialog { align: center middle; }
+    #apd-container {
+        width: 64;
+        height: auto;
+        max-height: 16;
+        background: #1a1a2e;
+        border: solid #8B5CF6;
+        padding: 1 2;
+    }
+    #apd-container Horizontal { height: auto; }
+    #apd-container Button {
+        min-width: 6;
+        width: 6;
+        height: 3;
+        margin: 0 1 1 0;
+    }
+    """
+
+    def __init__(self, colors: List[str], callback) -> None:
+        super().__init__()
+        self._colors = list(colors)
+        self._callback = callback
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="apd-container"):
+            yield Label("Палитра accent color")
+            with Horizontal():
+                for i in range(0, min(8, len(self._colors))):
+                    yield Button("  ", id=f"apd-pick-{i}")
+            with Horizontal():
+                for i in range(8, min(16, len(self._colors))):
+                    yield Button("  ", id=f"apd-pick-{i}")
+            with Horizontal():
+                for i in range(16, min(24, len(self._colors))):
+                    yield Button("  ", id=f"apd-pick-{i}")
+            yield Button("Отмена", id="apd-cancel")
+
+    def on_mount(self) -> None:
+        for i, color in enumerate(self._colors):
+            try:
+                b = self.query_one(f"#apd-pick-{i}", Button)
+                b.styles.background = color
+            except Exception:
+                pass
+
+    @on(Button.Pressed)
+    def on_click(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "apd-cancel":
+            self.dismiss()
+            if self._callback:
+                self._callback(None)
+            return
+        if bid.startswith("apd-pick-"):
+            try:
+                i = int(bid.replace("apd-pick-", "", 1))
+            except ValueError:
+                return
+            if 0 <= i < len(self._colors):
+                self.dismiss()
+                if self._callback:
+                    self._callback(self._colors[i])

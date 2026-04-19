@@ -103,3 +103,45 @@ def rollback_last(path: str) -> Dict[str, Any]:
         return {"ok": False, "error": "no_versions", "path": str(Path(path).resolve())}
     return rollback_to_version(path, versions[0]["id"])
 
+
+def latest_version_id_for_path(path: str) -> Optional[str]:
+    """ID последней версии по пути (по created_at)."""
+    vs = list_versions(path, limit=1)
+    return vs[0]["id"] if vs else None
+
+
+def latest_version_created_at(path: str) -> Optional[str]:
+    """created_at последней версии по пути (ISO), или None."""
+    vs = list_versions(path, limit=1)
+    return vs[0]["created_at"] if vs else None
+
+
+def snapshot_all_paths_latest_version() -> Dict[str, str]:
+    """Для каждого пути в БД версий — id самой новой версии (снимок «текущего» состояния трека TCA)."""
+    _init_db()
+    conn = sqlite3.connect(str(_db_path()))
+    rows = conn.execute("SELECT DISTINCT path FROM file_versions").fetchall()
+    conn.close()
+    out: Dict[str, str] = {}
+    for (p,) in rows:
+        vid = latest_version_id_for_path(p)
+        if vid:
+            out[p] = vid
+    return out
+
+
+def paths_first_version_strictly_after(ts_iso: str) -> List[str]:
+    """Пути, у которых первая запись в file_versions новее ts_iso (файл впервые отслежен после метки времени)."""
+    _init_db()
+    conn = sqlite3.connect(str(_db_path()))
+    rows = conn.execute(
+        """
+        SELECT path FROM file_versions
+        GROUP BY path
+        HAVING MIN(created_at) > ?
+        """,
+        (ts_iso,),
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+

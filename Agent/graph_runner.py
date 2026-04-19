@@ -1,19 +1,20 @@
 """LangGraph agent graph: call_model / execute_tools / workflow compilation."""
-import json
-import re as _re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph import END, StateGraph, MessagesState
-from json_repair import repair_json
 
 from .spinner import LiveSpinner
 from .message_utils import (
     sanitize_messages, is_retriable_bind_error, is_transient_error,
-    strip_think_tags, normalize_tool_call, reconstruct_broken_content,
-    annotate_errors, MAX_LLM_RETRIES,
+    strip_think_tags, extract_thought_segments, normalize_tool_call,
+    coerce_assistant_content_to_text, extract_reasoning_from_response,
+    reconstruct_broken_content,
+    annotate_errors, MAX_LLM_RETRIES, coalesce_lc_response_tool_calls,
+    extract_textual_tool_calls, extract_structured_tool_calls,
+    summarize_tool_like_final_answer,
 )
 
 try:
@@ -38,6 +39,11 @@ try:
     from Interface.tui_bridge import get_bridge
 except ImportError:
     def get_bridge(): return None
+
+try:
+    from .tool_schemas import validate_tool_arguments
+except ImportError:
+    from Agent.tool_schemas import validate_tool_arguments
 
 
 class AgentGraph:
@@ -109,59 +115,61 @@ class AgentGraph:
                 bridge.on_error(error_msg)
             return {"messages": [AIMessage(content=error_msg)]}
 
-        content = raw_response.content or ""
+        content = coerce_assistant_content_to_text(getattr(raw_response, "content", ""))
         meta = getattr(raw_response, "response_metadata", None) or {}
         if isinstance(content, str):
             content = content.encode("utf-8", "ignore").decode("utf-8", "ignore")
-            if self.is_reasoning:
-                content = strip_think_tags(content)
 
-        thought_match = _re.search(r"<thought>([\s\S]*?)</thought>", content)
-        if thought_match:
-            thought = thought_match.group(1).strip()
+        thought_segments, content = extract_thought_segments(content)
+        extra_thoughts = extract_reasoning_from_response(raw_response)
+        all_thoughts: List[str] = []
+        seen_thoughts: set[str] = set()
+        for thought in thought_segments + extra_thoughts:
+            t = (thought or "").strip()
+            if not t or t in seen_thoughts:
+                continue
+            seen_thoughts.add(t)
+            all_thoughts.append(t)
+
+        for thought in all_thoughts:
             if thought:
                 print_thinking(thought)
                 bridge = get_bridge()
                 if bridge:
                     bridge.on_thought(thought)
 
-        if getattr(raw_response, "tool_calls", None):
+        content = strip_think_tags(content)
+
+        merged_tool_calls = coalesce_lc_response_tool_calls(raw_response)
+        if merged_tool_calls:
             return {"messages": [AIMessage(
                 content=content or "",
-                tool_calls=raw_response.tool_calls,
+                tool_calls=merged_tool_calls,
                 response_metadata=meta,
             )]}
 
-        fixed_content = repair_json(content)
-        if fixed_content.strip():
-            try:
-                parsed = json.loads(fixed_content)
-                parsed_tools = [parsed] if not isinstance(parsed, list) else parsed
-                tool_calls = []
-                for t in parsed_tools:
-                    if not isinstance(t, dict) or "function" not in t:
-                        continue
-                    func = t["function"]
-                    args = func.get("arguments", {})
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except json.JSONDecodeError:
-                            args = {}
-                    elif not isinstance(args, dict):
-                        args = {}
-                    tool_calls.append({
-                        "name": func["name"],
-                        "args": args,
-                        "id": str(t.get("id", "call_" + str(hash(func["name"])))),
-                        "type": "tool_call",
-                    })
-                if tool_calls:
-                    return {"messages": [AIMessage(
-                        content="", tool_calls=tool_calls, response_metadata=meta,
-                    )]}
-            except json.JSONDecodeError:
-                pass
+        structured_tool_calls = extract_structured_tool_calls(content)
+        if structured_tool_calls:
+            return {"messages": [AIMessage(
+                content="",
+                tool_calls=structured_tool_calls,
+                response_metadata=meta,
+            )]}
+
+        textual_tool_calls, body = extract_textual_tool_calls(content)
+        if textual_tool_calls:
+            return {"messages": [AIMessage(
+                content=body or "",
+                tool_calls=textual_tool_calls,
+                response_metadata=meta,
+            )]}
+
+        if isinstance(content, str):
+            recent_tool_ctx = any(isinstance(m, ToolMessage) for m in messages[-4:])
+            if recent_tool_ctx:
+                humanized = summarize_tool_like_final_answer(content)
+                if humanized:
+                    content = humanized
 
         return {"messages": [AIMessage(content=content, response_metadata=meta)]}
 
@@ -197,6 +205,18 @@ class AgentGraph:
             )
 
         tool_args = reconstruct_broken_content(tool_name, tool_args)
+        tool_args, val_err = validate_tool_arguments(tool_name, tool_args)
+        if val_err:
+            err_body = {
+                "error": "argument_validation",
+                "detail": val_err,
+                "hint": "Проверь типы и обязательные поля; не дублируй вызовы — один инструмент за раз с полным набором аргументов.",
+            }
+            content_str = annotate_errors(tool_name, err_body)
+            return ToolMessage(
+                content=content_str, tool_call_id=tool_call_id, name=tool_name,
+            )
+
         display_agent_action(idx + 1, tool_name, tool_args)
 
         if bridge:

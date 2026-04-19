@@ -88,6 +88,81 @@ AVAILABLE_MODELS: List[Dict[str, Any]] = [
 ]
 
 
+def _ensure_v1_base_url(url: str) -> str:
+    u = (url or "").strip().rstrip("/")
+    if not u:
+        return "http://localhost:11434/v1"
+    if u.endswith("/v1"):
+        return u
+    return u + "/v1"
+
+
+def _load_ui_model_overrides() -> Dict[str, Any]:
+    """Read dynamic model settings from project .tca/ui_settings.json."""
+    p = Path.cwd() / ".tca" / "ui_settings.json"
+    if not p.exists():
+        return {}
+    try:
+        raw = json.loads(p.read_text("utf-8"))
+        if isinstance(raw, dict):
+            return raw
+    except Exception:
+        pass
+    return {}
+
+
+def _dedupe_models(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for m in models:
+        mid = str(m.get("id") or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        out.append(m)
+    return out
+
+
+def get_available_models() -> List[Dict[str, Any]]:
+    """Curated models + user-added OpenRouter/Ollama models from UI prefs."""
+    prefs = _load_ui_model_overrides()
+    merged: List[Dict[str, Any]] = list(AVAILABLE_MODELS)
+
+    for m in (prefs.get("openrouter_custom_models") or []):
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("id") or "").strip()
+        if not mid:
+            continue
+        merged.append(
+            {
+                "id": mid,
+                "name": str(m.get("name") or mid),
+                "ctx": int(m.get("ctx") or 128_000),
+                "tier": str(m.get("tier") or "custom"),
+                "source": "openrouter",
+            }
+        )
+
+    for m in (prefs.get("ollama_custom_models") or []):
+        if not isinstance(m, dict):
+            continue
+        name = str(m.get("name") or "").strip()
+        if not name:
+            continue
+        merged.append(
+            {
+                "id": f"ollama/{name}",
+                "name": str(m.get("label") or f"Ollama · {name}"),
+                "ctx": int(m.get("ctx") or 32_768),
+                "tier": "local",
+                "source": "ollama",
+            }
+        )
+
+    return _dedupe_models(merged)
+
+
 def _env(name: str, default: str | None = None) -> str:
     value = os.getenv(name)
     if value is None or value == "":
@@ -194,15 +269,88 @@ def get_llm(profile: str | None = None) -> Tuple[ChatOpenAI, ProfileName, str]:
 
     base_url = _env("TCA_BASE_URL", "https://openrouter.ai/api/v1")
     api_key = _env("OPENROUTER_API_KEY", "")
+    wire_model_name = model_name
+    model_kwargs: Dict[str, Any] = {}
+    extra_body: Optional[Dict[str, Any]] = None
+    top_p_value: Optional[float] = None
+    if model_name.startswith("ollama/"):
+        wire_model_name = model_name.split("/", 1)[1]
+        prefs = _load_ui_model_overrides()
+        base_url = _ensure_v1_base_url(
+            _env(
+                "OLLAMA_BASE_URL",
+                str(prefs.get("ollama_base_url") or _env("LOCAL_MODEL_URL", "http://localhost:11434/v1")),
+            )
+        )
+        api_key = (
+            _env("OLLAMA_API_KEY", str(prefs.get("ollama_api_key") or _env("LOCAL_MODEL_API_KEY", "ollama")))
+            or "ollama"
+        )
+        presets = prefs.get("ollama_presets") if isinstance(prefs.get("ollama_presets"), dict) else {}
+        model_map = (
+            prefs.get("ollama_model_settings")
+            if isinstance(prefs.get("ollama_model_settings"), dict)
+            else {}
+        )
+        raw_cfg = model_map.get(wire_model_name) if isinstance(model_map.get(wire_model_name), dict) else {}
+        preset_name = str(raw_cfg.get("preset") or "default")
+        preset_cfg = presets.get(preset_name) if isinstance(presets.get(preset_name), dict) else {}
+        merged_cfg: Dict[str, Any] = {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 40,
+            "repeat_penalty": 1.1,
+            "num_ctx": 32768,
+            "num_predict": 2048,
+            "stop": "",
+        }
+        merged_cfg.update({k: v for k, v in preset_cfg.items() if v is not None})
+        merged_cfg.update({k: v for k, v in raw_cfg.items() if k != "preset" and v is not None})
+        if "temperature" in merged_cfg:
+            temperature = float(merged_cfg["temperature"])
+            # ChatOpenAI already receives top-level temperature; avoid duplicate validation error.
+            merged_cfg.pop("temperature", None)
+        if "num_predict" in merged_cfg:
+            max_tokens = int(merged_cfg["num_predict"])
+            # Keep one source of truth for max generated tokens.
+            merged_cfg.pop("num_predict", None)
+        if "top_p" in merged_cfg:
+            try:
+                top_p_value = float(merged_cfg["top_p"])
+            except Exception:
+                top_p_value = None
+            merged_cfg.pop("top_p", None)
+        ollama_options: Dict[str, Any] = {}
+        for k in ("top_k", "repeat_penalty", "num_ctx"):
+            if k in merged_cfg:
+                ollama_options[k] = merged_cfg.pop(k)
+        stop_raw = str(merged_cfg.get("stop") or "").strip()
+        if stop_raw:
+            merged_cfg["stop"] = [s.strip() for s in stop_raw.split("|") if s.strip()]
+        else:
+            merged_cfg.pop("stop", None)
+        if ollama_options:
+            extra_body = {"options": ollama_options}
+        model_kwargs.update(merged_cfg)
+
+    llm_kwargs: Dict[str, Any] = {
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": wire_model_name,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "request_timeout": 120,
+        "max_retries": 3,
+    }
+    if top_p_value is not None:
+        llm_kwargs["top_p"] = top_p_value
+    if extra_body:
+        llm_kwargs["extra_body"] = extra_body
+    if model_kwargs:
+        llm_kwargs["model_kwargs"] = model_kwargs
 
     llm = ChatOpenAI(
-        base_url=base_url,
-        api_key=api_key,
-        model=model_name,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        request_timeout=120,
-        max_retries=3,
+        **llm_kwargs,
     )
     return llm, profile_name, model_name
 
@@ -216,17 +364,17 @@ def set_model(model_id: str) -> str:
 
 # ─── OpenRouter API ────────────────────────────────────────────────
 
-def fetch_openrouter_credits() -> Optional[Dict[str, Any]]:
+def fetch_openrouter_credits(api_key: str | None = None) -> Optional[Dict[str, Any]]:
     """Fetch account credits/usage from OpenRouter API.
     Returns dict with 'usage', 'limit', 'is_free_tier', 'rate_limit' or None on error.
     """
-    api_key = _env("OPENROUTER_API_KEY", "")
-    if not api_key:
+    key = (api_key or "").strip() or _env("OPENROUTER_API_KEY", "")
+    if not key:
         return None
 
     url = "https://openrouter.ai/api/v1/auth/key"
     req = urllib.request.Request(url, method="GET")
-    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Authorization", f"Bearer {key}")
     req.add_header("Content-Type", "application/json")
 
     try:
@@ -235,6 +383,135 @@ def fetch_openrouter_credits() -> Optional[Dict[str, Any]]:
             return data.get("data", data)
     except Exception:
         return None
+
+
+def fetch_openrouter_model_metadata(model_id: str, api_key: str = "") -> Optional[Dict[str, Any]]:
+    """Fetch one model card from OpenRouter /models by id."""
+    key = (api_key or "").strip() or _env("OPENROUTER_API_KEY", "")
+    if not key or not model_id:
+        return None
+    req = urllib.request.Request("https://openrouter.ai/api/v1/models", method="GET")
+    req.add_header("Authorization", f"Bearer {key}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    rows = data.get("data", [])
+    if not isinstance(rows, list):
+        return None
+    target = (model_id or "").strip().lower()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id") or "").strip()
+        if rid.lower() == target:
+            return row
+    return None
+
+
+def fetch_ollama_models(base_url: str = "", api_key: str = "") -> List[Dict[str, Any]]:
+    """Fetch model list from Ollama /api/tags (local or remote)."""
+    raw = (base_url or "").strip() or _env("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    base = raw.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    req = urllib.request.Request(base + "/api/tags", method="GET")
+    token = (api_key or "").strip() or _env("OLLAMA_API_KEY", "")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    out: List[Dict[str, Any]] = []
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return out
+    for m in (data.get("models") or []):
+        if not isinstance(m, dict):
+            continue
+        name = str(m.get("name") or "").strip()
+        if not name:
+            continue
+        details = m.get("details") if isinstance(m.get("details"), dict) else {}
+        out.append(
+            {
+                "name": name,
+                "label": f"Ollama · {name}",
+                "ctx": int(m.get("context_length") or details.get("context_length") or 32_768),
+                "details": details,
+            }
+        )
+    return out
+
+
+def _ollama_http_json(
+    method: str,
+    path: str,
+    payload: Optional[Dict[str, Any]] = None,
+    base_url: str = "",
+    api_key: str = "",
+    timeout: int = 8,
+) -> Optional[Dict[str, Any]]:
+    raw = (base_url or "").strip() or _env("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    base = raw.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    url = base + path
+    body = None
+    headers = {"Content-Type": "application/json"}
+    token = (api_key or "").strip() or _env("OLLAMA_API_KEY", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, method=method.upper(), data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw_out = resp.read().decode("utf-8", errors="ignore").strip()
+            if not raw_out:
+                return {}
+            data = json.loads(raw_out)
+            return data if isinstance(data, dict) else {"data": data}
+    except Exception:
+        return None
+
+
+def fetch_ollama_running_models(base_url: str = "", api_key: str = "") -> List[str]:
+    """Return currently loaded/running model names from Ollama /api/ps."""
+    data = _ollama_http_json("GET", "/api/ps", base_url=base_url, api_key=api_key, timeout=6)
+    if not isinstance(data, dict):
+        return []
+    rows = data.get("models") or []
+    out: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if name:
+            out.append(name)
+    return out
+
+
+def unload_ollama_models(base_url: str = "", api_key: str = "") -> Dict[str, Any]:
+    """Unload all currently running Ollama models (best-effort, no exceptions)."""
+    running = fetch_ollama_running_models(base_url=base_url, api_key=api_key)
+    unloaded = 0
+    failed: List[str] = []
+    for name in running:
+        ok = _ollama_http_json(
+            "POST",
+            "/api/generate",
+            payload={"model": name, "prompt": "", "stream": False, "keep_alive": 0},
+            base_url=base_url,
+            api_key=api_key,
+            timeout=8,
+        )
+        if ok is None:
+            failed.append(name)
+        else:
+            unloaded += 1
+    return {"running": len(running), "unloaded": unloaded, "failed": failed[:12]}
 
 
 def format_credits_info(data: Dict[str, Any]) -> str:
