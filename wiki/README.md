@@ -8,6 +8,7 @@
 | [**EXTENDING.md**](EXTENDING.md) | Разработчики | Кастомные инструменты, модели, настройка Creator Mode |
 | [**TOOLS.md**](TOOLS.md) | Все | Справочник инструментов агента (параметры и назначение) |
 | [**COMPACT_TOOLS.md**](COMPACT_TOOLS.md) | Разработчики | Мульти-тулы (`plan_tool`, `library_context`, Agent-браузер и т.д.) |
+| [**BACKGROUND_AND_DEEP.md**](BACKGROUND_AND_DEEP.md) | Разработчики | Фоновый помощник (`start_background_task`), Deep Solver (`spawn_subagent`), дедуп `run_command` |
 | [**tool/**](tool/) | Все | Документация модулей инструментов с разбором кода «по строчкам» (часть имён — legacy под капотом) |
 | [**Interface/**](Interface/) | Разработчики | Архитектура TUI, расширение и стилизация интерфейса |
 

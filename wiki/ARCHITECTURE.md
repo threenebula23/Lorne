@@ -51,12 +51,14 @@
 | Файл | Роль |
 |------|------|
 | **`agent.py`** | Старт TUI или classic CLI; `TUIBridge` только в TUI; граф, сессии, снимки перед ходом, **`handle_rollback`** (откат чата + workspace). |
-| **`graph_runner.py`** | Узлы LangGraph: `call_model`, `execute_tools`, маршрутизация `should_continue`. Read-only тулы из фиксированного набора выполняются **параллельно** (пул потоков), остальные — по очереди. При ошибке `bind_tools` из-за `parallel_tool_calls` — повторная привязка с `force_no_parallel`. |
+| **`graph_runner.py`** | Узлы LangGraph: `call_model`, `execute_tools`, маршрутизация `should_continue`. Read-only тулы из фиксированного набора выполняются **параллельно** (пул потоков), остальные — по очереди. Подсказки при **петлях** повторяющихся тулов. При ошибке `bind_tools` из-за `parallel_tool_calls` — повторная привязка с `force_no_parallel`. |
 | **`tool_registry.py`** | Сборка списка: `_base_tools` (в т.ч. мульти-тулы из `compact_tools.py`), кастомные, `build_tools(agent_mode, playwright_python)`, `set_tool_session_prefs`, `bind_tools_safe()`. |
 | **`llm_provider.py`** | OpenRouter-клиент, профили (`fast`/`balanced`/`quality`), список моделей, ретраи. |
 | **`command_router.py`** | Slash-команды (`/model`, `/plan`, …) в classic-режиме. |
 | **`planner.py`** | Построение плана задачи через LLM (`build_plan`); сохранение в файл делает **`planning_tool`** → `.tca/plan.json`. |
-| **`message_utils.py`** | Санитизация истории, компактирование, усечение результатов инструментов. |
+| **`message_utils.py`** | Санитизация истории, компактирование, усечение результатов инструментов, восстановление «сломанных» tool_calls/JSON, эвристика **анти-петли** повторяющихся тулов. |
+| **`deep_solver.py`** | **Deep Solver**: длительный цикл на **локальной** модели; чекпоинты; `spawn_subagent` (фон) + `get_subagent_result`; без `ask_user`. |
+| **`background_agent_runner.py`** | Очередь и потоки для **`start_background_task`**: отдельный LLM+тул-цикл. |
 | **`git_integration.py`** | Обёртка над GitPython: статус, diff, автокоммиты при записи файлов (если включено). |
 | **`creator_mode.py`** | Creator Mode: воркеры, оркестрация (`sequential` / `parallel` / `supervisor` / `hierarchical`), сводка супервайзера. |
 | **`creator_summary.py`** | Один формат Markdown-итога Creator для TUI, classic и записи в `messages`. |
@@ -86,7 +88,9 @@
 | Файл | Содержимое |
 |------|------------|
 | `file_ops.py` | `read_file`, `list_files`, `edit_file`, `search_in_files`, `write_file`, `get_file_line_count` |
-| `terminal_tool.py` | `run_command` |
+| `terminal_tool.py` | `run_command` (опц. дедуп: `TCA_RUN_COMMAND_DEDUPE_S`) |
+| `download_tool.py` | `download_file` |
+| `parallel_helper_tool.py` | `start_background_task`, `get_background_result` |
 | `code_gen.py` | `create_code_file`, `append_code_snippet` (у модели — **`code_file_tool`**) |
 | `planning_tool.py` | `save_plan`, … (у модели — **`plan_tool`**) |
 | `compact_tools.py` | Диспетчеры: `plan_tool`, `docx_write_tool`, `docxedit_tool`, `ocr_tool`, `code_file_tool`, `git_ops`, `library_context`, `reasoning_tool`, `headless_browser`, `playwright_sync`, `file_versions_tool` |
@@ -183,6 +187,7 @@
 | [README.md](../README.md) | Установка, команды пользователя, обзор |
 | [EXTENDING.md](EXTENDING.md) | Новые инструменты, модели, Creator |
 | [TOOLS.md](TOOLS.md) | Справочник инструментов агента |
+| [BACKGROUND_AND_DEEP.md](BACKGROUND_AND_DEEP.md) | Фоновый помощник, Deep Solver, дедуп `run_command` |
 | [COMPACT_TOOLS.md](COMPACT_TOOLS.md) | Мульти-тулы и режим Agent / Playwright |
 
 ---

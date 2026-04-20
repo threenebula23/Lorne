@@ -15,7 +15,9 @@
 | | **`code_file_tool`** | `create` \| `append` кода | [code_gen.md](tool/code_gen.md) |
 | **План** | **`plan_tool`** | `save` \| `load` \| `update` \| `clear` | [planning_tool.md](tool/planning_tool.md) |
 | **Рассуждения** | **`reasoning_tool`** | `think` \| `diff` \| `analyze` | [thinking_tool.md](tool/thinking_tool.md) |
-| **Система** | `run_command` | Shell с подтверждением | [terminal_tool.md](tool/terminal_tool.md) |
+| **Система** | `run_command` | Shell с подтверждением; опц. дедуп — `TCA_RUN_COMMAND_DEDUPE_S` | [terminal_tool.md](tool/terminal_tool.md) |
+| | **`start_background_task`**, **`get_background_result`** | Фоновый микро-цикл LLM+тулов, пока основной граф занят | [BACKGROUND_AND_DEEP.md](BACKGROUND_AND_DEEP.md) |
+| | **`download_file`** | Скачать URL в файл в воркспейсе (лимит размера) | [download_tool.py](../Agent/tools/download_tool.py) |
 | | `code_interpreter` | Python в subprocess | [code_interpreter.md](tool/code_interpreter.md) |
 | **Git** | **`git_ops`** | `status` \| `log` \| `diff` \| `rollback_file` | [git_tool.md](tool/git_tool.md) |
 | **Версии файла** | **`file_versions_tool`** | `list` \| `rollback` | [versioning_tool.md](tool/versioning_tool.md) |
@@ -42,6 +44,9 @@
 2. Конкретный URL — `web_fetch`.  
 3. Документация пакета — `library_context`: при неизвестном id сначала `resolve`, затем `docs`; размытый запрос — `search` + при необходимости `web_fetch`.
 
+### Фоновый помощник и долгий терминал
+Если сначала нужен **короткий** тест/проверка, а затем **долгий** `run_command` (сервер, сборка), используй `start_background_task` → `run_command` → `get_background_result` — см. [BACKGROUND_AND_DEEP.md](BACKGROUND_AND_DEEP.md). Для **Deep Solver** (локальная модель) — `spawn_subagent` / `get_subagent_result` в том же документе.
+
 ### Версии и Git
 Снимки SQLite перед правками; откат одного файла через модель — **`file_versions_tool`**, в classic также slash-команды `/versions` и `/rollback`. В **TUI** дополнительно откат **целого хода** диалога (кнопка у сообщения пользователя) восстанавливает файлы по снимкам сессии — см. [ARCHITECTURE.md](ARCHITECTURE.md) §8. Git — **`git_ops`**.
 
@@ -54,4 +59,5 @@
 
 - [COMPACT_TOOLS.md](COMPACT_TOOLS.md) — полная таблица `action` и соответствие legacy-функциям  
 - [ARCHITECTURE.md](ARCHITECTURE.md) — `tool_registry`, `graph_runner`  
+- [BACKGROUND_AND_DEEP.md](BACKGROUND_AND_DEEP.md) — фоновый помощник и Deep Solver  
 - [EXTENDING.md](EXTENDING.md) — добавление своих тулов и Creator  
