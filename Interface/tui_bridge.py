@@ -121,20 +121,34 @@ class TUIBridge:
         self._call(self.app.chat.add_info, f"📝 {summary}")
 
     def on_tool_result(self, tool_name: str, result: Any) -> None:
-        summary = ""
-        if isinstance(result, dict):
-            if result.get("error"):
-                summary = f"error: {result.get('error')}"
-            elif result.get("action"):
-                summary = result.get("action", "")
-            elif result.get("file_path"):
-                summary = str(result.get("file_path", ""))
-            elif result.get("stdout"):
-                stdout = str(result["stdout"])[:100]
-                summary = stdout
-        elif isinstance(result, str):
-            summary = result[:80]
-        self._call(self.app.chat.add_tool_result, tool_name, summary)
+        # Route through the pretty ToolCardBlock for a curated set of
+        # "read-only / side-effect" tools (read_file, list_files,
+        # run_command, …). Write tools stay on the legacy one-liner +
+        # CodeDiffBlock path because the diff is more informative than a
+        # textual summary.
+        try:
+            from Interface.panels.tool_card import PRETTY_TOOL_NAMES as _PRETTY
+        except Exception:
+            _PRETTY = frozenset()
+
+        if tool_name in _PRETTY:
+            self._call(self.app.chat.add_tool_card, tool_name, result)
+        else:
+            summary = ""
+            if isinstance(result, dict):
+                if result.get("error"):
+                    summary = f"error: {result.get('error')}"
+                elif result.get("action"):
+                    summary = result.get("action", "")
+                elif result.get("file_path"):
+                    summary = str(result.get("file_path", ""))
+                elif result.get("stdout"):
+                    stdout = str(result["stdout"])[:100]
+                    summary = stdout
+            elif isinstance(result, str):
+                summary = result[:80]
+            self._call(self.app.chat.add_tool_result, tool_name, summary)
+
         if isinstance(result, dict):
             self._call(self.app.chat.accumulate_tool_result, tool_name, result)
             self._call(self.app.chat.accumulate_web_tool_result, tool_name, result)
@@ -188,8 +202,72 @@ class TUIBridge:
                                   action: str = "", thinking: str = "") -> None:
         self._call(self.app.chat.update_creator_worker, worker_id, tool_name, action, thinking)
 
+    def on_creator_progress_start(self, task: str = "", total_workers: int = 0) -> None:
+        """Mount the animated progress block in the main chat."""
+        self._call(self.app.chat.start_creator_progress, task, total_workers)
+
+    def on_creator_progress_update(
+        self,
+        phase: str = "",
+        percent: float = 0.0,
+        completed: int = 0,
+        total: int = 0,
+    ) -> None:
+        """Push a new target percent / phase label to the progress block."""
+        self._call(
+            self.app.chat.update_creator_progress,
+            phase, percent, completed, total,
+        )
+
+    def on_creator_progress_finish(self, summary: str = "") -> None:
+        """Mark the progress block as complete (fills to 100 %)."""
+        self._call(self.app.chat.finish_creator_progress, summary)
+
     def on_creator_hide(self) -> None:
         pass
+
+    # ─── Deep Solver ─────────────────────────────────
+
+    def on_deep_checkpoint(self, cp_id: str, index: int, title: str,
+                           summary: str = "", turn_index: int = 0) -> None:
+        """Mount a ``DeepCheckpointBlock`` card in the main chat stream."""
+        self._call(
+            self.app.chat.add_deep_checkpoint,
+            cp_id, index, title, summary, turn_index,
+        )
+
+    def on_deep_context_chip(self, cp_id: str, label: str) -> None:
+        """Show a pseudo-attachment chip for a continued checkpoint."""
+        self._call(self.app.chat.add_deep_context_chip, cp_id, label)
+
+    def on_deep_status(self, *, running: bool, elapsed: str = "",
+                       checkpoints: int = 0, model: str = "") -> None:
+        """Refresh the elapsed-time badge rendered above the chat input
+        while a Deep Solver run is live. Called on a heartbeat from the
+        Deep loop so the user can watch wall-clock time tick up without
+        staring into the main message stream.
+        """
+        self._call(
+            self.app.chat.set_deep_status,
+            running=running, elapsed=elapsed,
+            checkpoints=checkpoints, model=model,
+        )
+
+    def on_download_progress(self, *, download_id: str, url: str,
+                             received_bytes: int, total_bytes: int,
+                             elapsed: float, done: bool = False,
+                             error: str = "") -> None:
+        """Push a download-progress tick to the chat UI. The chat panel
+        lazily creates / updates a :class:`DownloadProgressBlock` with
+        percentage, size, throughput and a cancel button.
+        """
+        self._call(
+            self.app.chat.update_download_progress,
+            download_id=download_id, url=url,
+            received_bytes=int(received_bytes),
+            total_bytes=int(total_bytes),
+            elapsed=float(elapsed), done=bool(done), error=str(error or ""),
+        )
 
     # ─── Agent working state ─────────────────────────
 

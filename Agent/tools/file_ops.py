@@ -1,4 +1,5 @@
 """Инструменты работы с файлами: чтение, листинг, поиск в подпапках, редактирование."""
+import fnmatch
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -90,10 +91,28 @@ def _replace_first_occurrence(text: str, old_str: str, new_str: str) -> Optional
     return None
 
 
+# Auto-truncate threshold (in lines) for ``read_file`` when called without
+# an explicit range. Prevents the model from accidentally pulling a 5k-line
+# file into context. The model can still request the rest via offset/limit
+# or via ``read_file_lines``.
+_READ_FILE_AUTO_HEAD_LINES = 400
+_READ_FILE_HARD_LINE_CAP = 5000
+
+
 @tool
 def read_file(filename: str, encoding: str = "utf-8",
               offset: int = 0, limit: int = 0) -> Dict[str, Any]:
-    """Читает содержимое файла. filename — путь к файлу. offset — начальная строка (0-based), limit — кол-во строк (0 = весь файл). Для больших файлов используй offset+limit для чтения по частям."""
+    """Читает файл целиком или диапазон.
+
+    Параметры (всё опционально):
+      • offset — начальная строка (0-based).
+      • limit — кол-во строк (0 = до конца).
+
+    Экономия токенов: если файл длиннее ~400 строк и диапазон не задан,
+    возвращается только голова файла + предупреждение. Для больших файлов
+    используйте ``read_file_lines`` (1-based start/end — удобнее) или
+    передайте ``offset``/``limit``.
+    """
     full_path = resolve_abs_path(filename)
     try:
         content = full_path.read_text(encoding=encoding)
@@ -105,6 +124,7 @@ def read_file(filename: str, encoding: str = "utf-8",
     if offset > 0 or limit > 0:
         start = max(0, offset)
         end = start + limit if limit > 0 else total_lines
+        end = min(end, start + _READ_FILE_HARD_LINE_CAP)
         selected = all_lines[start:end]
         content = "".join(selected)
         return {
@@ -116,32 +136,156 @@ def read_file(filename: str, encoding: str = "utf-8",
             "showing": f"строки {start + 1}-{start + len(selected)} из {total_lines}",
         }
 
+    if total_lines > _READ_FILE_AUTO_HEAD_LINES:
+        head = all_lines[:_READ_FILE_AUTO_HEAD_LINES]
+        return {
+            "file_path": str(full_path),
+            "content": "".join(head),
+            "total_lines": total_lines,
+            "offset": 0,
+            "limit": _READ_FILE_AUTO_HEAD_LINES,
+            "showing": (
+                f"строки 1-{_READ_FILE_AUTO_HEAD_LINES} из {total_lines} "
+                f"(авто-обрезка; используйте read_file_lines для нужного диапазона)"
+            ),
+            "truncated": True,
+        }
+
     return {"file_path": str(full_path), "content": content, "total_lines": total_lines}
 
 
 @tool
-def list_files(path: str, recursive: bool = False, pattern: str = "*") -> Dict[str, Any]:
-    """Список файлов в директории. path — путь к папке; recursive=True — обход подпапок; pattern — glob, например *.py."""
-    full_path = resolve_abs_path(path)
+def read_file_lines(filename: str, start_line: int = 1, end_line: int = 0,
+                    encoding: str = "utf-8") -> Dict[str, Any]:
+    """Читает фрагмент файла по 1-based диапазону строк — для экономии токенов.
+
+    Параметры:
+      • start_line — первая строка включительно (1-based, min 1).
+      • end_line — последняя строка включительно; 0 означает «до конца файла»
+        (но не больше ``start_line + 5000`` строк).
+      • encoding — по умолчанию utf-8.
+
+    Возвращает ``content`` с префиксом номеров строк ``N| …`` (так модель
+    сразу видит какие строки она получила), плюс метаданные.
+    Предпочтительный тул для больших файлов: читайте кусками по 50-300
+    строк вокруг интересующего места, а не весь файл целиком.
+    """
+    full_path = resolve_abs_path(filename)
+    try:
+        raw = full_path.read_text(encoding=encoding)
+    except UnicodeDecodeError:
+        return {
+            "file_path": str(full_path),
+            "error": "binary_or_non_utf8",
+            "content": "",
+            "total_lines": 0,
+        }
+    except FileNotFoundError:
+        return {
+            "file_path": str(full_path),
+            "error": "file_not_found",
+            "content": "",
+            "total_lines": 0,
+        }
+
+    lines = raw.splitlines()
+    total = len(lines)
+    start = max(1, int(start_line or 1))
+    if start > total:
+        return {
+            "file_path": str(full_path),
+            "content": "",
+            "total_lines": total,
+            "start_line": start,
+            "end_line": start - 1,
+            "showing": f"пустой диапазон: файл содержит {total} строк",
+        }
+    if end_line and int(end_line) > 0:
+        end = min(total, int(end_line))
+    else:
+        end = total
+    end = min(end, start + _READ_FILE_HARD_LINE_CAP - 1)
+    if end < start:
+        end = start
+
+    pad = len(str(end))
+    body = "\n".join(f"{n:>{pad}}| {lines[n - 1]}" for n in range(start, end + 1))
+
+    return {
+        "file_path": str(full_path),
+        "content": body,
+        "total_lines": total,
+        "start_line": start,
+        "end_line": end,
+        "showing": f"строки {start}-{end} из {total}",
+    }
+
+
+@tool
+def list_files(path: str = ".", recursive: bool = False, pattern: str = "*") -> Dict[str, Any]:
+    """Список файлов в каталоге. path — папка (\"\" или \".\" = текущая). recursive — рекурсивно. pattern — glob по **имени** файла (например *.py)."""
+    raw = (path or "").strip() or "."
+    full_path = resolve_abs_path(raw)
+    pat = (pattern or "*").strip() or "*"
+    if not full_path.exists():
+        return {
+            "path": str(full_path), "error": "not_found", "entries": [],
+            "recursive": bool(recursive), "pattern": pat,
+        }
+    if full_path.is_file():
+        return {
+            "path": str(full_path),
+            "entries": [{"path": str(full_path), "name": full_path.name, "type": "file"}],
+            "recursive": False,
+            "note": "path_is_file",
+            "pattern": pat,
+        }
+    if not full_path.is_dir():
+        return {
+            "path": str(full_path), "error": "not_a_directory", "entries": [],
+            "recursive": bool(recursive), "pattern": pat,
+        }
+
     all_entries: List[Dict[str, Any]] = []
     if not recursive:
-        for item in sorted(full_path.iterdir(), key=lambda x: x.name.lower()):
-            if _skip_dir(item.name):
+        try:
+            for item in sorted(full_path.iterdir(), key=lambda x: x.name.lower()):
+                if _skip_dir(item.name):
+                    continue
+                if not fnmatch.fnmatch(item.name, pat):
+                    continue
+                all_entries.append({
+                    "path": str(item),
+                    "name": item.name,
+                    "type": "dir" if item.is_dir() else "file",
+                })
+        except OSError as e:
+            return {
+                "path": str(full_path), "error": str(e), "entries": [],
+                "recursive": False, "pattern": pat,
+            }
+        return {
+            "path": str(full_path), "entries": all_entries, "recursive": False, "pattern": pat,
+        }
+
+    try:
+        for p in full_path.rglob("*"):
+            if not p.is_file():
                 continue
-            all_entries.append({
-                "path": str(item),
-                "name": item.name,
-                "type": "dir" if item.is_dir() else "file",
-            })
-        return {"path": str(full_path), "entries": all_entries, "recursive": False}
-    for p in full_path.rglob(pattern):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(full_path)
-        if any(_skip_dir(part) for part in rel.parts):
-            continue
-        all_entries.append({"path": str(p), "relative": str(rel), "name": p.name})
-    return {"path": str(full_path), "entries": all_entries[:500], "recursive": True}
+            if not fnmatch.fnmatch(p.name, pat):
+                continue
+            rel = p.relative_to(full_path)
+            if any(_skip_dir(part) for part in rel.parts):
+                continue
+            all_entries.append({"path": str(p), "relative": str(rel), "name": p.name})
+    except OSError as e:
+        return {
+            "path": str(full_path), "error": str(e), "entries": [],
+            "recursive": True, "pattern": pat,
+        }
+    return {
+        "path": str(full_path), "entries": all_entries[:500], "recursive": True, "pattern": pat,
+    }
 
 
 @tool
@@ -169,7 +313,7 @@ def search_in_files(directory: str, query: str, file_pattern: str = "*.py", max_
 
 @tool
 def edit_file(path: str, old_str: str, new_str: str) -> Dict[str, Any]:
-    """Заменяет первое вхождение old_str на new_str. Если old_str пустой — создаёт/перезаписывает файл содержимым new_str. Возвращает total_lines — всего строк в файле после записи."""
+    """Заменяет первое вхождение old_str на new_str. Пустой old_str — перезапись файла содержимым new_str."""
     full_path = resolve_abs_path(path)
     if old_str == "":
         before_text = ""
@@ -223,7 +367,7 @@ def edit_file(path: str, old_str: str, new_str: str) -> Dict[str, Any]:
 
 @tool
 def write_file(path: str, content: str) -> Dict[str, Any]:
-    """Создаёт или полностью перезаписывает файл содержимым. Удобно для создания нового кода. Возвращает path, total_lines."""
+    """Создать или перезаписать файл содержимым (content)."""
     full_path = resolve_abs_path(path)
     before_text = ""
     before_total_lines = 0
@@ -249,10 +393,7 @@ def write_file(path: str, content: str) -> Dict[str, Any]:
 
 @tool
 def replace_file_lines(path: str, start_line: int, end_line: int, content: str) -> Dict[str, Any]:
-    """Точечная замена диапазона строк (как патч): строки start_line–end_line включительно (нумерация с 1) заменяются на content.
-    Не пересылай весь файл — только новый фрагмент. content может быть пустым (удаление диапазона).
-    Если в content несколько строк, лучше заканчивать последнюю переводом строки; иначе он будет добавлен автоматически.
-    Перед вызовом прочитай нужный участок через read_file с offset/limit."""
+    """Заменить строки start_line..end_line (1-based, включительно) на content. Пустой content — удаление диапазона."""
     full_path = resolve_abs_path(path)
     if start_line < 1 or end_line < start_line:
         return {"path": str(full_path), "error": "invalid_line_range", "start_line": start_line, "end_line": end_line}
@@ -297,8 +438,7 @@ def replace_file_lines(path: str, start_line: int, end_line: int, content: str) 
 
 @tool
 def insert_file_lines(path: str, after_line: int, content: str) -> Dict[str, Any]:
-    """Вставить content после строки after_line. after_line=0 — в начало файла; after_line=k — после k-й строки (1-based).
-    Несколько строк без финального \\n: последняя строка не склеится со следующей строкой файла (добавляется перевод строки)."""
+    """Вставить content после строки after_line (0 = в начало; k = после k-й строки, 1-based)."""
     full_path = resolve_abs_path(path)
     if after_line < 0:
         return {"path": str(full_path), "error": "after_line must be >= 0"}

@@ -315,7 +315,6 @@ class FileEditorTabPane(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(id="file-tab-toolbar"):
             yield Button("Сохранить", id="file-tab-save", variant="default")
-            yield Button("Запустить", id="file-tab-run", variant="success")
             yield Button("Закрыть вкладку", id="file-tab-close", variant="error")
         editor = TCACodeEditor.code_editor(
             self._initial_text, language=self._lang, id=self._editor_id,
@@ -394,7 +393,6 @@ class CodeEditorPanel(Vertical):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="editor-toolbar"):
-            yield Button("▶ Run", id="editor-run-btn", variant="success")
             yield Button("💾 Save", id="editor-save-btn", variant="default")
             yield Button("✕ Close", id="editor-close-btn", variant="error")
         yield Vertical(id="find-overlay")
@@ -613,7 +611,7 @@ class CodeEditorPanel(Vertical):
                     wrap=True, markup=True, classes="nb-output",
                 ))
             elif cell_type == "markdown":
-                scroll.mount(Static("[bold #3B82F6]Markdown[/]", classes="nb-cell-header"))
+                scroll.mount(Static("[bold #6B7280]Markdown[/]", classes="nb-cell-header"))
                 md_ed = NotebookCellTextArea.code_editor(
                     source,
                     language="markdown",
@@ -864,7 +862,7 @@ class CodeEditorPanel(Vertical):
             return
 
         out_log.clear()
-        out_log.write(Text("Running…", style="#F59E0B"))
+        out_log.write(Text("Running…", style="#6B7280"))
 
         key = self._notebook_key_for_tabnum(tab_num)
         if not key:

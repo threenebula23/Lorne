@@ -203,22 +203,38 @@ class LorenzWidget(Widget):
 class ProjectPickerScreen(ModalScreen[Optional[Path]]):
     """Pick a project directory with a tree."""
 
-    DEFAULT_CSS = """
+    from Interface.modal_style import MODAL_SHARED_CSS as _SHARED_CSS
+
+    DEFAULT_CSS = _SHARED_CSS + """
     ProjectPickerScreen { align: center middle; }
     #picker {
         width: 92%;
         height: 92%;
-        background: #151520;
-        border: round #8B5CF6;
-        padding: 1;
     }
-    #picker-title { height: 1; text-style: bold; margin: 0 0 1 0; }
+    #picker-title { height: auto; }
     #picker-nav { height: 3; layout: horizontal; margin: 0 0 1 0; }
-    #picker-nav Button { min-width: 9; margin: 0 1 0 0; }
-    #picker-path { width: 1fr; }
-    #picker-tree { height: 1fr; }
+    #picker-nav Button {
+        min-width: 11;
+        margin: 0 1 0 0;
+        height: 3;
+    }
+    #picker-path {
+        width: 1fr;
+        background: #0D0D0D;
+        color: #E5E7EB;
+        border: solid #2D2D3D;
+    }
+    #picker-tree {
+        height: 1fr;
+        background: #12121A;
+        border: solid #2D2D3D;
+    }
     #picker-actions { height: 3; layout: horizontal; margin: 1 0 0 0; }
-    #picker-actions Button { min-width: 16; margin: 0 1 0 0; }
+    #picker-actions Button {
+        min-width: 16;
+        margin: 0 1 0 0;
+        height: 3;
+    }
     """
 
     def __init__(self, start_dir: Path):
@@ -228,8 +244,8 @@ class ProjectPickerScreen(ModalScreen[Optional[Path]]):
         self._root = Path("/")
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="picker"):
-            yield Label("Выберите папку проекта", id="picker-title")
+        with Vertical(id="picker", classes="modal-card"):
+            yield Label("Выберите папку проекта", id="picker-title", classes="modal-title")
             with Horizontal(id="picker-nav"):
                 yield Button("Root", id="picker-root")
                 yield Button("Home", id="picker-home")
@@ -238,10 +254,20 @@ class ProjectPickerScreen(ModalScreen[Optional[Path]]):
                 yield Input(str(self._start_dir), id="picker-path")
             yield DirectoryTree(str(self._root), id="picker-tree")
             with Horizontal(id="picker-actions"):
-                yield Button("Открыть", id="picker-open")
+                yield Button("Открыть", id="picker-open", variant="primary")
                 yield Button("Отмена", id="picker-cancel")
 
     def on_mount(self) -> None:
+        try:
+            from Interface.modal_style import apply_accent_to
+            apply_accent_to(
+                self,
+                container_id="picker",
+                title_id="picker-title",
+                title_text="Выберите папку проекта",
+            )
+        except Exception:
+            pass
         self._go_to(self._start_dir)
 
     def _go_to(self, target: Path) -> None:

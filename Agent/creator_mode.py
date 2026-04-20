@@ -166,6 +166,7 @@ def _build_worker_graph(
             tool_call_id = str(tc_dict.get("id", f"call_{hash(tool_name)}"))
 
             tool_obj = tool_map.get(tool_name)
+            _t_tool_start = time.time()
             if tool_obj is None:
                 result = f"Unknown tool: {tool_name}"
             else:
@@ -177,6 +178,20 @@ def _build_worker_graph(
                         result = tool_obj.invoke(tool_args)
                     except Exception as e:
                         result = f"Error: {e}"
+            if isinstance(result, dict) and "elapsed_seconds" not in result:
+                result["elapsed_seconds"] = round(time.time() - _t_tool_start, 3)
+
+            # Propagate tool result to the TUI so that file-changes and web
+            # sources accumulate in the main chat panel even when the user is
+            # running in Creator Mode (previously this only worked for Agent
+            # / Normal modes because creator used its own graph).
+            try:
+                from Interface.tui_bridge import get_bridge as _get_bridge_ct
+                _b = _get_bridge_ct()
+                if _b is not None:
+                    _b.on_tool_result(tool_name, result)
+            except Exception:
+                pass
 
             content_str = json.dumps(result, ensure_ascii=False, default=str) if isinstance(result, (dict, list)) else str(result)
             # Truncate for context saving
@@ -591,7 +606,45 @@ def run_creator_mode(
         def print_error(m): print(f"  ✗ {m}")
 
     t_start = time.time()
-    
+
+    # Grab the UI bridge up-front so we can drive the in-chat progress block
+    # from every phase (planning → routing → workers → supervisor → done).
+    # Only the root Creator run owns the progress widget; nested
+    # spawn_sub_creator calls re-use the parent's bridge for worker-level
+    # updates but must not mount an extra block.
+    try:
+        from Interface.tui_bridge import get_bridge
+        bridge = get_bridge()
+    except Exception:
+        bridge = None
+
+    is_root_run = (int(depth or 0) == 0) and not (parent_worker_id or "").strip()
+
+    def _emit_progress(
+        phase: str = "",
+        percent: float | None = None,
+        completed: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        if bridge is None or not is_root_run:
+            return
+        try:
+            bridge.on_creator_progress_update(
+                phase=phase or "",
+                percent=float(percent) if percent is not None else 0.0,
+                completed=int(completed) if completed is not None else 0,
+                total=int(total) if total is not None else 0,
+            )
+        except Exception:
+            pass
+
+    if is_root_run and bridge is not None:
+        try:
+            bridge.on_creator_progress_start(task=task, total_workers=0)
+        except Exception:
+            pass
+        _emit_progress(phase="starting", percent=2.0)
+
     prev_auto_confirm = False
     try:
         import Agent.tools.terminal_tool as term_tool
@@ -602,11 +655,17 @@ def run_creator_mode(
 
     # === Фаза 1: Планирование ===
     print_info("Creator Mode: разбиваю задачу на подзадачи…")
+    _emit_progress(phase="planning", percent=5.0)
 
     try:
         subtasks = build_plan(task)
     except Exception as e:
         print_error(f"Не удалось разбить задачу: {e}")
+        if is_root_run and bridge is not None:
+            try:
+                bridge.on_creator_progress_finish(summary=f"Ошибка планирования: {e}")
+            except Exception:
+                pass
         return {"status": "error", "error": str(e)}
 
     if not subtasks:
@@ -616,6 +675,8 @@ def run_creator_mode(
     print_success(f"Подзадачи ({len(subtasks)}):")
     for i, st in enumerate(subtasks):
         print_info(f"  {i + 1}. {st}")
+
+    _emit_progress(phase="planning", percent=10.0, completed=0, total=len(subtasks))
 
     # === Фаза 2: Проверка локального сервера ===
     local_available = check_local_server(local_base_url)
@@ -668,6 +729,11 @@ def run_creator_mode(
         wc["role"] = roles[idx] if idx < len(roles) else "implementer"
     print_info(f"Оркестрация Creator: {orchestration}")
 
+    _emit_progress(
+        phase="routing", percent=18.0,
+        completed=0, total=len(worker_configs),
+    )
+
     # === Фаза 4: Запуск агентов (параллель / конвейер) ===
     if display:
         for wc in worker_configs:
@@ -686,12 +752,27 @@ def run_creator_mode(
 
     # Push initial full tree to TUI showing all workers as pending
     try:
-        from Interface.tui_bridge import get_bridge
-        bridge = get_bridge()
         if bridge:
             _push_full_tree(bridge, task, worker_configs, results)
     except Exception:
         bridge = None
+
+    _emit_progress(
+        phase="working", percent=22.0,
+        completed=0, total=len(worker_configs),
+    )
+
+    # 20 % reserved for planning/routing, 75 % for worker execution, 5 % for
+    # supervisor synthesis (if any). Keep the curve monotonic so users never
+    # see the bar drop.
+    _work_start_pct = 22.0
+    _work_end_pct = 92.0 if orchestration == "supervisor" else 97.0
+
+    def _progress_for_completed(done_count: int) -> float:
+        if not worker_configs:
+            return _work_end_pct
+        frac = max(0.0, min(1.0, done_count / float(len(worker_configs))))
+        return _work_start_pct + frac * (_work_end_pct - _work_start_pct)
 
     try:
         if orchestration == "sequential":
@@ -734,6 +815,12 @@ def run_creator_mode(
                 )
                 if bridge:
                     _push_full_tree(bridge, task, worker_configs, results)
+                _emit_progress(
+                    phase="working",
+                    percent=_progress_for_completed(len(results)),
+                    completed=len(results),
+                    total=len(worker_configs),
+                )
         else:
             effective_workers = min(max_workers, len(worker_configs))
             with ThreadPoolExecutor(max_workers=effective_workers) as executor:
@@ -775,6 +862,12 @@ def run_creator_mode(
                             display.update_worker(worker_id, status="error", result_preview=str(e)[:80])
                     if bridge:
                         _push_full_tree(bridge, task, worker_configs, results)
+                    _emit_progress(
+                        phase="working",
+                        percent=_progress_for_completed(len(results)),
+                        completed=len(results),
+                        total=len(worker_configs),
+                    )
 
     except KeyboardInterrupt:
         print_warning("Creator Mode прерван пользователем")
@@ -795,6 +888,10 @@ def run_creator_mode(
 
     supervisor_synthesis = ""
     if orchestration == "supervisor" and results:
+        _emit_progress(
+            phase="supervising", percent=95.0,
+            completed=len(results), total=len(worker_configs),
+        )
         try:
             sup_llm, _sup_name = get_heavy_llm()
             supervisor_synthesis = synthesize_supervisor_report(task, results, sup_llm)
@@ -817,6 +914,23 @@ def run_creator_mode(
 
     done_count = sum(1 for r in results if r["status"] == "done")
     error_count = sum(1 for r in results if r["status"] == "error")
+
+    if is_root_run and bridge is not None:
+        try:
+            final_phase = "error" if (error_count and not done_count) else "done"
+            bridge.on_creator_progress_update(
+                phase=final_phase, percent=100.0,
+                completed=done_count, total=max(done_count, len(worker_configs)),
+            )
+            status_label = "завершено" if final_phase == "done" else (
+                "частично" if done_count else "ошибка"
+            )
+            summary_line = (
+                f"{status_label}: {done_count}/{len(results)} воркеров · {elapsed:.1f}s"
+            )
+            bridge.on_creator_progress_finish(summary=summary_line)
+        except Exception:
+            pass
 
     # Visualizing changed files
     modified_files = []

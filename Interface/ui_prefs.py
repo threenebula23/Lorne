@@ -32,6 +32,16 @@ DEFAULT_PREFS: Dict[str, Any] = {
         }
     },
     "ollama_model_settings": {},
+    # Creator orchestration (parallel | pipeline | auto).
+    "orchestration_mode": "auto",
+    # Max parallel workers when creator runs in parallel orchestration.
+    "orchestration_max_workers": 4,
+    # Research mode knobs — both apply to local + remote.
+    "research_max_sources": 6,
+    "research_max_rounds": 3,
+    "research_deep_fetch": True,
+    # Custom tools master switch (RAG, planning, interpreter, thinking, etc.).
+    "custom_tools_enabled": True,
 }
 
 

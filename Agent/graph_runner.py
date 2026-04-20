@@ -3,7 +3,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph, MessagesState
 
 from .spinner import LiveSpinner
@@ -15,6 +15,7 @@ from .message_utils import (
     annotate_errors, MAX_LLM_RETRIES, coalesce_lc_response_tool_calls,
     extract_textual_tool_calls, extract_structured_tool_calls,
     summarize_tool_like_final_answer,
+    tool_repetition_loop_nudge,
 )
 
 try:
@@ -78,7 +79,13 @@ class AgentGraph:
             spinner = LiveSpinner("Модель думает")
             spinner.start()
             try:
-                raw_response = self.llm_with_tools.invoke(messages)
+                invoke_msgs: List[Any] = list(messages)
+                _nudge = tool_repetition_loop_nudge(messages, min_identical=5)
+                if _nudge:
+                    invoke_msgs.append(
+                        SystemMessage(content="### Анти-петля (только для этого ответа)\n" + _nudge)
+                    )
+                raw_response = self.llm_with_tools.invoke(invoke_msgs)
                 spinner.stop()
                 last_error = None
                 break
@@ -171,6 +178,13 @@ class AgentGraph:
                 if humanized:
                     content = humanized
 
+        # Some local models dump EVERYTHING into <thought>/Harmony channels and
+        # leave the visible body empty. Instead of ending the turn with "",
+        # surface the last reasoning segment so the user sees what the model
+        # produced.
+        if not (content or "").strip() and all_thoughts:
+            content = all_thoughts[-1]
+
         return {"messages": [AIMessage(content=content, response_metadata=meta)]}
 
     _READ_ONLY_TOOLS = frozenset({
@@ -232,6 +246,7 @@ class AgentGraph:
                     bridge.on_file_working(str(fpath))
 
         tool = self.tool_map.get(tool_name)
+        _t_start = time.time()
         if tool is None:
             result = {
                 "error": "unknown_tool",
@@ -245,6 +260,10 @@ class AgentGraph:
                 result = {"error": type(e).__name__, "detail": str(e)}
 
         parsed = result if isinstance(result, (dict, list)) else str(result)
+        # Stamp elapsed time on dict results so the TUI tool card can show
+        # ``⏱ 0.42s`` — same cadence as Deep Solver / Creator Mode.
+        if isinstance(parsed, dict) and "elapsed_seconds" not in parsed:
+            parsed["elapsed_seconds"] = round(time.time() - _t_start, 3)
         display_tool_result(idx + 1, tool_name, parsed)
 
         if bridge and tool_name in self._FILE_TOOLS and isinstance(parsed, dict):

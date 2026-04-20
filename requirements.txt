@@ -5,6 +5,9 @@ json-repair>=0.7.0
 langchain-core>=0.2.0
 pydantic>=2.5.0
 langchain-openai>=0.1.0
+# Native Ollama client — used for ollama/* models so num_ctx/top_k/repeat_penalty
+# actually take effect. Falls back to ChatOpenAI on /v1 if this package is absent.
+langchain-ollama>=0.2.0
 langgraph>=0.0.20
 # Beautiful terminal output (Claude Code-like UI)
 rich>=13.0.0

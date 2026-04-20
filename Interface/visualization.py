@@ -59,13 +59,9 @@ WHITE = "\033[38;2;229;231;235m"  # #E5E7EB
 # that are not in the curated list (e.g. custom OpenRouter model IDs).
 DEFAULT_CONTEXT_LIMIT = 128_000
 
-_MODEL_CTX_CACHE: Optional[Dict[str, int]] = None
-
-
-def _build_ctx_cache() -> Dict[str, int]:
-    global _MODEL_CTX_CACHE
-    if _MODEL_CTX_CACHE is not None:
-        return _MODEL_CTX_CACHE
+def _build_ctx_map() -> Dict[str, int]:
+    # Rebuilt on every lookup so freshly added Ollama/OpenRouter custom models
+    # (saved via UI prefs) expose their declared ctx immediately.
     result: Dict[str, int] = {}
     try:
         from Agent.llm_provider import get_available_models
@@ -73,15 +69,26 @@ def _build_ctx_cache() -> Dict[str, int]:
     except ImportError:
         _models = []
     for m in _models:
-        result[m["id"]] = m["ctx"]
-    _MODEL_CTX_CACHE = result
+        try:
+            ctx = int(m.get("ctx") or 0)
+        except Exception:
+            ctx = 0
+        if ctx > 0:
+            result[str(m["id"])] = ctx
     return result
 
 
 def get_context_limit(model_name: str) -> int:
-    ctx_map = _build_ctx_cache()
+    ctx_map = _build_ctx_map()
     if model_name in ctx_map:
         return ctx_map[model_name]
+    # Ollama custom models registered as `ollama/<name>` — accept a suffix
+    # match against the configured map.
+    if (model_name or "").startswith("ollama/"):
+        wire = model_name.split("/", 1)[1]
+        for key, limit in ctx_map.items():
+            if key.endswith("/" + wire) or key == wire:
+                return limit
     for key, limit in ctx_map.items():
         if key in (model_name or "") or (model_name or "") in key:
             return limit

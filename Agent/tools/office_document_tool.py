@@ -505,23 +505,15 @@ def _apply_one_docx_op(doc: Any, op: Dict[str, Any]) -> None:
 
 @tool
 def docx_document_advanced_ops(file_path: str, operations_json: str) -> Dict[str, Any]:
-    """Продвинутая вёрстка .docx (уровень ленты Word: Главная, Разметка страницы, Вставка, частично Макет).
+    """Глубокая вёрстка .docx: абзацы, runs, секции, таблицы, разрывы.
 
-    operations_json — JSON-массив объектов с полем `op`. Поддерживаемые op:
-    - `append_paragraph`: text, style (как docx_document_create).
-    - `set_paragraph_alignment`: paragraph_index, alignment: left|center|right|justify.
-    - `set_paragraph_spacing`: paragraph_index; опционально space_before_pt, space_after_pt;
-      line_rule: single|1.5|double|exact|multiple; для exact — line_spacing_pt; для multiple — line_spacing (число).
-    - `set_paragraph_indent`: paragraph_index; first_line_indent_cm, left_indent_cm, right_indent_cm (опционально).
-    - `set_run_font`: paragraph_index; run_index (0..n-1 или -1 = все runs); bold, italic, underline, font_name, font_size_pt, color_hex (RRGGBB).
-    - `set_section_margins`: section_index (по умолчанию 0); top_cm, bottom_cm, left_cm, right_cm.
-    - `set_section_orientation`: section_index, orientation: portrait|landscape.
-    - `set_section_page_size_cm`: section_index, width_cm, height_cm.
-    - `insert_page_break_after_paragraph`: paragraph_index.
-    - `insert_table_after_paragraph`: paragraph_index, rows, cols; опционально cell_texts: [["a","b"], ...].
-
-    Ограничение: до 40 операций за вызов. Сноски, оглавление с полями PAGE, перекрёстные ссылки —
-    через OOXML или `code_interpreter` + python-docx/lxml; тулы их не генерируют автоматически.
+    operations_json — JSON-массив объектов `{"op": "...", ...}`. Поддерживаемые op:
+    append_paragraph, set_paragraph_alignment, set_paragraph_spacing,
+    set_paragraph_indent, set_run_font, set_section_margins,
+    set_section_orientation, set_section_page_size_cm,
+    insert_page_break_after_paragraph, insert_table_after_paragraph.
+    До 40 операций за вызов. Точный набор полей см. в ответе на ошибку валидации.
+    Поля PAGE, TOC, сноски — только через code_interpreter + python-docx/lxml.
     """
     try:
         from docx import Document

@@ -1,6 +1,7 @@
 """Инструмент выполнения команд в терминале (Windows/Unix)."""
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict
 
@@ -60,9 +61,7 @@ def _is_dangerous(command: str) -> bool:
 
 @tool
 def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[str, Any]:
-    """Выполняет команду в терминале (Windows: cmd, Unix: sh) ТОЛЬКО с подтверждением пользователя.
-    stdin у процесса закрыт (неинтерактивный режим): программы с input() или ожиданием ввода получат EOF и завершатся или выдадут ошибку — используй неинтерактивные флаги, echo/pipe или другой способ.
-    cwd — рабочая директория: пустая строка или '.' = текущая директория проекта. Если путь не существует — команда выполнится в текущей директории."""
+    """Выполнить shell-команду с подтверждением пользователя. stdin закрыт — используй `-y`/echo/pipe. cwd: пустая или '.' = текущая директория."""
     from pathlib import Path
     from Terminal.runner import run_command_safe
     
@@ -75,7 +74,9 @@ def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[
             yield
 
     signature = _sig(command, cwd)
-    if _too_soon(signature, window_s=20):
+    # TCA_RUN_COMMAND_DEDUPE_S: 0 = отключить; иначе окно в секундах (раньше было 20)
+    _dedupe_s = int(os.environ.get("TCA_RUN_COMMAND_DEDUPE_S", "0") or 0)
+    if _dedupe_s > 0 and _too_soon(signature, window_s=_dedupe_s):
         return {
             "stdout": "",
             "stderr": "Команда пропущена: повтор того же запуска слишком скоро (защита от циклов).",
@@ -131,6 +132,12 @@ def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[
             cwd_str = str(resolved)
         # иначе cwd_str остаётся None — выполнение в текущей директории
     
+    t0 = time.time()
     res = run_command_safe(command=command.strip(), cwd=cwd_str, timeout=timeout_seconds)
+    elapsed = round(time.time() - t0, 3)
     _RECENT[signature] = {"ts": time.time(), "returncode": res.get("returncode")}
+    # Enrich the result so the TUI card / facts ledger can show what ran.
+    if isinstance(res, dict):
+        res.setdefault("command", command.strip())
+        res.setdefault("elapsed_seconds", elapsed)
     return res

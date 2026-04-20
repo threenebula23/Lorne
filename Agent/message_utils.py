@@ -33,52 +33,170 @@ def is_retriable_bind_error(exc: Exception) -> bool:
     return any(p in msg for p in _RETRIABLE_PATTERNS)
 
 
+_HARMONY_CHANNEL_RE = _re.compile(
+    r"<\|channel\|>\s*(?P<channel>[A-Za-z_]+)\s*(?:<\|constrain\|>[^<]*)?"
+    r"<\|message\|>(?P<body>[\s\S]*?)"
+    r"(?=<\|(?:start|channel|end|return|call|message)\|>|\Z)",
+    flags=_re.IGNORECASE,
+)
+_HARMONY_META_TOKEN_RE = _re.compile(
+    r"<\|(?:start|end|return|call|constrain|message|channel)\|>[^<]*",
+    flags=_re.IGNORECASE,
+)
+_HARMONY_HIDDEN_CHANNELS = frozenset({"analysis", "commentary", "thinking", "thoughts"})
+
+
+def _extract_harmony_segments(text: str) -> tuple[List[str], str]:
+    """Split gpt-oss/Harmony messages into (hidden_reasoning, visible_body)."""
+    raw = str(text or "")
+    if "<|channel|>" not in raw and "<|message|>" not in raw:
+        return [], raw
+
+    thoughts: List[str] = []
+    visible: List[str] = []
+    last_end = 0
+    found = False
+    for m in _HARMONY_CHANNEL_RE.finditer(raw):
+        found = True
+        last_end = m.end()
+        channel = (m.group("channel") or "").strip().lower()
+        body = (m.group("body") or "").strip()
+        if not body:
+            continue
+        if channel in _HARMONY_HIDDEN_CHANNELS:
+            thoughts.append(body)
+        else:
+            visible.append(body)
+
+    if not found:
+        # Stray Harmony tokens only — just strip them out.
+        cleaned = _HARMONY_META_TOKEN_RE.sub("", raw).strip()
+        return [], cleaned
+
+    tail = raw[last_end:].strip()
+    if tail:
+        tail_clean = _HARMONY_META_TOKEN_RE.sub("", tail).strip()
+        if tail_clean:
+            # Anything after the last known channel marker is usually final output.
+            visible.append(tail_clean)
+
+    body = "\n".join(part for part in visible if part).strip()
+    return thoughts, body
+
+
+# XML-style reasoning tags emitted by various models. `thought`/`think`/`thinking`
+# are the TCA/DeepSeek/Qwen/Anthropic convention; `reasoning`/`analysis`/
+# `scratchpad` show up in smaller local models (Mistral-family, ReAct fine-tunes);
+# `redacted_thinking` is Anthropic's encrypted variant.
+_REASONING_XML_TAGS = (
+    "redacted_thinking",
+    "thinking",
+    "think",
+    "thought",
+    "reasoning",
+    "analysis",
+    "scratchpad",
+)
+_REASONING_XML_ALT_GROUP = "|".join(_REASONING_XML_TAGS)
+
+# Qwen/ChatML-style pipe tokens:  <|thinking|> ... <|/thinking|>
+_REASONING_PIPE_TAGS = ("thinking", "think", "thought", "reasoning")
+_REASONING_PIPE_ALT_GROUP = "|".join(_REASONING_PIPE_TAGS)
+
+# Bracketed markers emitted by some local/finetuned models:
+#   [THINKING] ... [/THINKING], [THOUGHT] ... [/THOUGHT], [REASONING] ... [/REASONING]
+_REASONING_BRACKET_TAGS = ("thinking", "thought", "reasoning")
+_REASONING_BRACKET_ALT_GROUP = "|".join(_REASONING_BRACKET_TAGS)
+
+
+def _reasoning_tag_patterns() -> List[_re.Pattern[str]]:
+    """Build the list of regexes that capture reasoning segments in text."""
+    return [
+        _re.compile(rf"<({_REASONING_XML_ALT_GROUP})>([\s\S]*?)</\1>", _re.IGNORECASE),
+        _re.compile(
+            rf"<\|({_REASONING_PIPE_ALT_GROUP})\|>([\s\S]*?)<\|/\1\|>",
+            _re.IGNORECASE,
+        ),
+        _re.compile(
+            rf"\[\s*({_REASONING_BRACKET_ALT_GROUP})\s*\]([\s\S]*?)\[\s*/\s*\1\s*\]",
+            _re.IGNORECASE,
+        ),
+    ]
+
+
+# Pre-compiled once; patterns are static so we can safely cache them.
+_REASONING_TAG_PATTERNS = _reasoning_tag_patterns()
+
+# Dangling opener with no closer — keep this lenient because local models
+# frequently stop mid-stream and leave the tag open.
+_REASONING_DANGLING_RE = _re.compile(
+    rf"(?:<({_REASONING_XML_ALT_GROUP})>"
+    rf"|<\|({_REASONING_PIPE_ALT_GROUP})\|>"
+    rf"|\[\s*({_REASONING_BRACKET_ALT_GROUP})\s*\])([\s\S]*)$",
+    _re.IGNORECASE,
+)
+
+
 def strip_think_tags(text: str) -> str:
-    """Remove <think>…</think>, Qwen <think>…</think>, and <thought> blocks."""
+    """Remove every reasoning wrapper from visible output.
+
+    Covers XML-style tags (<think>, <thinking>, <thought>, <reasoning>,
+    <analysis>, <scratchpad>, <redacted_thinking>), Qwen pipe tags
+    (<|thinking|>…<|/thinking|>), bracketed markers ([THINKING]…[/THINKING]),
+    unclosed/dangling variants, and Harmony/gpt-oss channel blocks.
+    """
     out = str(text or "")
-    out = _re.sub(r"<redacted_thinking>[\s\S]*?</redacted_thinking>", "", out, flags=_re.IGNORECASE)
-    out = _re.sub(r"<thinking>[\s\S]*?</thinking>", "", out, flags=_re.IGNORECASE)
-    out = _re.sub(r"<think>[\s\S]*?</think>", "", out, flags=_re.IGNORECASE)
-    out = _re.sub(r"<thought>[\s\S]*?</thought>", "", out, flags=_re.IGNORECASE)
-    # Some local models stop mid-response and leave an opening tag without a closer.
-    out = _re.sub(r"<(?:redacted_thinking|thinking|think|thought)>[\s\S]*$", "", out, flags=_re.IGNORECASE)
+    for pat in _REASONING_TAG_PATTERNS:
+        out = pat.sub("", out)
+    out = _REASONING_DANGLING_RE.sub("", out)
+    # Harmony / gpt-oss tokens (<|channel|>analysis<|message|>…) — strip any
+    # leftovers if the caller didn't go through extract_thought_segments first.
+    if "<|" in out:
+        _, body = _extract_harmony_segments(out)
+        out = body if body else _HARMONY_META_TOKEN_RE.sub("", out)
     return out.strip()
 
 
 def extract_thought_segments(text: str) -> tuple[List[str], str]:
-    """Extract reasoning blocks for UI: <thought>, <think>, Qwen <think>."""
+    """Split raw model output into (thought_segments, visible_body).
+
+    Recognised reasoning wrappers (all case-insensitive, content preserved in
+    emission order):
+      - XML: <thought>, <think>, <thinking>, <reasoning>, <analysis>,
+        <scratchpad>, <redacted_thinking>
+      - Qwen/ChatML pipe tokens: <|thinking|>…<|/thinking|>, <|think|>…
+      - Bracketed markers: [THINKING]…[/THINKING], [THOUGHT]…, [REASONING]…
+      - Harmony / gpt-oss channels: <|channel|>analysis<|message|>…
+      - Unclosed tags left at the tail of a truncated generation.
+    """
     if not (text or "").strip():
         return [], text or ""
     thoughts: List[str] = []
     body = str(text)
 
-    def _pull(pattern: _re.Pattern[str]) -> None:
-        nonlocal body
+    def _sub_capture(m: _re.Match[str]) -> str:
+        # Reasoning content is always the *last* capture group in our patterns
+        # (the first groups capture the tag name for the back-reference).
+        inner = (m.group(m.lastindex) if m.lastindex else m.group(0)).strip()
+        if inner:
+            thoughts.append(inner)
+        return ""
 
-        def _sub(m: _re.Match[str]) -> str:
-            inner = (m.group(1) or "").strip()
-            if inner:
-                thoughts.append(inner)
-            return ""
+    for pat in _REASONING_TAG_PATTERNS:
+        body = pat.sub(_sub_capture, body)
 
-        body = pattern.sub(_sub, body)
-
-    _pull(_re.compile(r"<thought>([\s\S]*?)</thought>", _re.IGNORECASE))
-    _pull(_re.compile(r"<redacted_thinking>([\s\S]*?)</redacted_thinking>", _re.IGNORECASE))
-    _pull(_re.compile(r"<thinking>([\s\S]*?)</thinking>", _re.IGNORECASE))
-    _pull(_re.compile(r"<think>([\s\S]*?)</think>", _re.IGNORECASE))
-
-    # Recover dangling thought tags from truncated local-model generations.
-    dangling = _re.search(
-        r"<(?:thought|redacted_thinking|thinking|think)>([\s\S]*)$",
-        body,
-        flags=_re.IGNORECASE,
-    )
+    dangling = _REASONING_DANGLING_RE.search(body)
     if dangling:
-        tail = (dangling.group(1) or "").strip()
+        tail = (dangling.group(dangling.lastindex) or "").strip()
         if tail:
             thoughts.append(tail)
-        body = body[:dangling.start()]
+        body = body[: dangling.start()]
+
+    if "<|" in body:
+        harmony_thoughts, harmony_body = _extract_harmony_segments(body)
+        if harmony_thoughts or harmony_body != body:
+            thoughts.extend(harmony_thoughts)
+            body = harmony_body
 
     return thoughts, (body or "").strip()
 
@@ -112,8 +230,21 @@ def coerce_assistant_content_to_text(content: Any) -> str:
     return str(content)
 
 
+_REASONING_TEXT_KEYS = (
+    "text", "content", "reasoning", "reasoning_content",
+    "thinking", "thought", "summary_text", "summary",
+    "tool_plan", "plan",
+)
+
+
 def _collect_reasoning_texts(value: Any, out: List[str]) -> None:
-    if value is None:
+    """Collect textual reasoning fragments from arbitrary nested values.
+
+    Bool values (e.g. Gemini's `"thought": true` flag marking a part as a
+    thought) carry no text — the caller handles them upstream in
+    `_collect_reasoning_nodes`.
+    """
+    if value is None or isinstance(value, bool):
         return
     if isinstance(value, str):
         txt = value.strip()
@@ -125,20 +256,31 @@ def _collect_reasoning_texts(value: Any, out: List[str]) -> None:
             _collect_reasoning_texts(item, out)
         return
     if isinstance(value, dict):
-        for key in ("text", "content", "reasoning", "reasoning_content", "thinking", "thought"):
+        for key in _REASONING_TEXT_KEYS:
             if key in value:
                 _collect_reasoning_texts(value.get(key), out)
         return
 
 
+# Top-level keys anywhere in provider payloads that directly carry reasoning.
+#   - `reasoning` / `reasoning_content`: OpenAI o-series, DeepSeek-R1, OpenRouter
+#   - `reasoning_details`: ChatOpenAI passthrough
+#   - `reasoning_summary`: OpenAI Responses API summary
+#   - `thinking`, `thought`, `redacted_thinking`: Anthropic, TCA, misc.
+#   - `tool_plan`: Cohere Command R/Plus emits this before tool calls
+#   - `analysis`, `scratchpad`: occasional small-model schemas
 _REASONING_KEYS = frozenset({
     "reasoning", "reasoning_content", "reasoning_details",
+    "reasoning_summary",
     "thinking", "thought", "redacted_thinking",
+    "tool_plan",
+    "analysis", "scratchpad",
 })
 
 _REASONING_TYPES = frozenset({
     "reasoning", "thinking", "thought", "redacted_thinking",
     "reasoning_content", "reasoning_text",
+    "analysis",
 })
 
 _REASONING_CONTAINER_KEYS = frozenset({
@@ -146,7 +288,25 @@ _REASONING_CONTAINER_KEYS = frozenset({
     "delta", "choices", "choice", "output", "outputs",
     "response", "responses", "item", "items",
     "data", "parts", "chunk",
+    # OpenAI Responses API reasoning summary bucket.
+    "summary",
 })
+
+
+def _is_gemini_thought_part(value: Dict[str, Any]) -> bool:
+    """Detect Gemini `thinkingConfig` parts: {"thought": true, "text": "..."}.
+
+    Gemini doesn't use a distinct type/channel; it flips a boolean flag on an
+    otherwise regular text part. Without this shortcut we'd drop the text.
+    """
+    if not isinstance(value, dict):
+        return False
+    flag = value.get("thought")
+    if flag is True:
+        return True
+    if isinstance(flag, str) and flag.strip().lower() == "true":
+        return True
+    return False
 
 
 def _collect_reasoning_nodes(value: Any, out: List[str]) -> None:
@@ -162,9 +322,17 @@ def _collect_reasoning_nodes(value: Any, out: List[str]) -> None:
 
     node_type = str(value.get("type") or "").strip().lower()
     if node_type in _REASONING_TYPES:
-        for key in ("text", "content", "reasoning", "reasoning_content", "thinking", "thought"):
+        for key in _REASONING_TEXT_KEYS:
             if key in value:
                 _collect_reasoning_texts(value.get(key), out)
+        return
+
+    # Gemini `thinkingConfig` shape: {"thought": True, "text": "..."}
+    if _is_gemini_thought_part(value):
+        for key in ("text", "content", "reasoning", "reasoning_content"):
+            if key in value:
+                _collect_reasoning_texts(value.get(key), out)
+        # Don't descend further — the remaining keys are metadata.
         return
 
     for key, val in value.items():
@@ -173,6 +341,58 @@ def _collect_reasoning_nodes(value: Any, out: List[str]) -> None:
             _collect_reasoning_texts(val, out)
         elif key_l in _REASONING_CONTAINER_KEYS:
             _collect_reasoning_nodes(val, out)
+
+
+def extract_message_usage(msg: Any) -> Dict[str, int]:
+    """Return {'input_tokens', 'output_tokens', 'total_tokens'} for an AIMessage.
+
+    Supports multiple provider shapes:
+      - LangChain `usage_metadata` attribute (standard, emitted by ChatOllama/ChatOpenAI)
+      - `response_metadata.usage` / `response_metadata.token_usage` (OpenAI-compat)
+      - Ollama native `response_metadata.prompt_eval_count` + `eval_count`
+    Returns zero counts when nothing is available.
+    """
+    out = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    if msg is None:
+        return out
+
+    um = getattr(msg, "usage_metadata", None)
+    if isinstance(um, dict):
+        inp = int(um.get("input_tokens") or 0)
+        outp = int(um.get("output_tokens") or 0)
+        tot = int(um.get("total_tokens") or 0) or (inp + outp)
+        if inp or outp or tot:
+            return {"input_tokens": inp, "output_tokens": outp, "total_tokens": tot}
+
+    meta = getattr(msg, "response_metadata", None) or {}
+    if isinstance(meta, dict):
+        usage = meta.get("usage") or meta.get("token_usage") or {}
+        if isinstance(usage, dict):
+            inp = int(
+                usage.get("prompt_tokens")
+                or usage.get("input_tokens")
+                or 0
+            )
+            outp = int(
+                usage.get("completion_tokens")
+                or usage.get("output_tokens")
+                or 0
+            )
+            tot = int(usage.get("total_tokens") or 0) or (inp + outp)
+            if inp or outp or tot:
+                return {"input_tokens": inp, "output_tokens": outp, "total_tokens": tot}
+
+        # Native Ollama (/api/chat) exposes these top-level counters.
+        inp = int(meta.get("prompt_eval_count") or 0)
+        outp = int(meta.get("eval_count") or 0)
+        if inp or outp:
+            return {
+                "input_tokens": inp,
+                "output_tokens": outp,
+                "total_tokens": inp + outp,
+            }
+
+    return out
 
 
 def extract_reasoning_from_response(raw: Any) -> List[str]:
@@ -333,6 +553,42 @@ _TOOL_NAME_ALIASES: Dict[str, str] = {
 }
 
 _META_TOOL_NAMES = frozenset({"assistant", "tool", "function", "call_tool"})
+
+
+# ─── Known tool registry (populated at runtime from tool_registry) ──────
+# Used to reject line-by-line textual tool-call false positives like
+# `if b=0`, `print(...)`, `sys.exit(1)` emitted inside code blocks.
+_KNOWN_TOOL_NAMES: set[str] = set()
+
+
+def register_known_tool_names(names: Any) -> None:
+    """Record the list of real tool names available in the current session."""
+    try:
+        items = list(names or [])
+    except Exception:
+        return
+    cleaned: set[str] = set()
+    for item in items:
+        if not item:
+            continue
+        cleaned.add(str(item).strip())
+    if cleaned:
+        _KNOWN_TOOL_NAMES.clear()
+        _KNOWN_TOOL_NAMES.update(cleaned)
+
+
+def _is_registered_tool(name: str) -> bool:
+    n = str(name or "").strip()
+    if not n:
+        return False
+    if not _KNOWN_TOOL_NAMES:
+        # Registry not populated yet — be permissive so startup paths keep working.
+        return True
+    if n in _KNOWN_TOOL_NAMES:
+        return True
+    # Tool may arrive under a canonical name after alias normalization.
+    alias = _TOOL_NAME_ALIASES.get(n)
+    return bool(alias and alias in _KNOWN_TOOL_NAMES)
 
 
 def _normalize_tool_args(raw_args: Any) -> Dict[str, Any]:
@@ -561,7 +817,46 @@ def normalize_tool_call(tc: Any) -> Dict[str, Any]:
     return {"name": tool_name, "args": args, "id": tool_id}
 
 
-def _normalize_textual_tool_candidate(text: str) -> Dict[str, Any] | None:
+def tool_repetition_loop_nudge(
+    messages: List[Any],
+    *,
+    min_identical: int = 5,
+    lookback_messages: int = 24,
+) -> str:
+    """When the model repeats the same tool+args many times, return an anti-loop hint (ephemeral)."""
+    if min_identical < 3:
+        return ""
+    tail = messages[-max(8, lookback_messages) :]
+    sigs: List[str] = []
+    for m in tail:
+        if not isinstance(m, AIMessage):
+            continue
+        for tc in getattr(m, "tool_calls", None) or []:
+            try:
+                n = normalize_tool_call(tc)
+                na = str(n.get("name") or "")
+                args = n.get("args") or {}
+                sig = f"{na}|{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)[:800]}"
+                sigs.append(sig)
+            except Exception:
+                continue
+    if len(sigs) < min_identical:
+        return ""
+    last = sigs[-1]
+    if last and sigs[-min_identical:].count(last) >= min_identical:
+        return (
+            "СТОП-ПЕТЛЯ: тот же вызов инструмента повторяется много раз подряд. "
+            "Не дублируй с теми же аргументами. Смени стратегию: "
+            "`web_search` + `web_fetch` по ошибке/доке; другой `read_file` / путь; "
+            "`start_background_task` для параллельного теста, пока длинный `run_command` "
+            "занят; перепиши команду или разбей задачу."
+        )
+    return ""
+
+
+def _normalize_textual_tool_candidate(
+    text: str, *, strict: bool = False,
+) -> Dict[str, Any] | None:
     raw = str(text or "").strip()
     if not raw:
         return None
@@ -575,8 +870,12 @@ def _normalize_textual_tool_candidate(text: str) -> Dict[str, Any] | None:
         tool_name = call_match.group(1)
         args = _parse_python_kwargs(call_match.group(2))
         norm = normalize_tool_call({"name": tool_name, "args": args, "id": ""})
-        if norm.get("name") and norm.get("name") not in _META_TOOL_NAMES:
-            return norm
+        final_name = str(norm.get("name") or "")
+        if final_name and final_name not in _META_TOOL_NAMES:
+            if not strict or _is_registered_tool(final_name):
+                return norm
+        # In strict mode, `print(...)` / `sys.exit(...)` would otherwise be
+        # misread as tool calls. Fall through (and ultimately return None).
 
     kwargs_src = raw
     prefix_name = ""
@@ -599,9 +898,12 @@ def _normalize_textual_tool_candidate(text: str) -> Dict[str, Any] | None:
             guessed_name = "ask_user"
 
     norm = normalize_tool_call({"name": guessed_name, "args": args, "id": ""})
-    if norm.get("name") and norm.get("name") not in _META_TOOL_NAMES:
-        return norm
-    return None
+    final_name = str(norm.get("name") or "")
+    if not final_name or final_name in _META_TOOL_NAMES:
+        return None
+    if strict and not _is_registered_tool(final_name):
+        return None
+    return norm
 
 
 def extract_textual_tool_calls(content: str) -> tuple[List[Dict[str, Any]], str]:
@@ -611,14 +913,21 @@ def extract_textual_tool_calls(content: str) -> tuple[List[Dict[str, Any]], str]
     if not stripped:
         return [], text
 
-    direct = _normalize_textual_tool_candidate(stripped)
+    # Direct mode: entire payload is a single call. Tolerated for short blobs
+    # (e.g. `assistant name='ask_user', question='...'`), but not for arbitrary
+    # multi-line code dumps where local models append markdown/Python after the
+    # real answer.
+    direct_strict = "\n" in stripped
+    direct = _normalize_textual_tool_candidate(stripped, strict=direct_strict)
     if direct is not None:
         return [direct], ""
 
+    # Line-by-line mode is strict so lines like `if b=0`, `print(...)`,
+    # `sys.exit(1)` emitted inside a code block don't get misread as tool calls.
     calls: List[Dict[str, Any]] = []
     body_lines: List[str] = []
     for line in text.splitlines():
-        tc = _normalize_textual_tool_candidate(line.strip())
+        tc = _normalize_textual_tool_candidate(line.strip(), strict=True)
         if tc is not None:
             calls.append(tc)
         else:
@@ -975,6 +1284,7 @@ def reconstruct_broken_content(tool_name: str, args: dict) -> dict:
 
 TOOL_RESULT_LIMITS: Dict[str, int] = {
     "read_file": 4000,
+    "read_file_lines": 6000,
     "search_in_files": 3000,
     "run_command": 3000,
     "list_files": 2000,
@@ -1096,8 +1406,41 @@ def annotate_errors(tool_name: str, result: Any) -> str:
 
 # ─── Conversation compaction ────────────────────────────────────────
 
-def compact_conversation(messages: List[Any], keep_last: int = 10) -> List[Any]:
-    """Summarize old messages to free up context window."""
+def _compact_tool_result_for_summary(msg: ToolMessage, per_msg_limit: int = 240) -> str:
+    """Compact a single tool result to a short excerpt for the summary block.
+
+    Large tool results (file reads, web fetches, OCR) dominate the context;
+    once they're old enough to be compacted we only keep a short head + tail
+    so the model still knows what happened without re-reading ~10k characters.
+    """
+    name = getattr(msg, "name", "tool") or "tool"
+    content = str(getattr(msg, "content", "") or "").strip()
+    if not content:
+        return f"  [tool result: {name}] (empty)"
+    if len(content) <= per_msg_limit:
+        return f"  [tool result: {name}] {content}"
+    half = per_msg_limit // 2
+    return (
+        f"  [tool result: {name}] {content[:half]} … "
+        f"[+{len(content) - per_msg_limit} симв.] … {content[-half:]}"
+    )
+
+
+def compact_conversation(
+    messages: List[Any],
+    keep_last: int = 8,
+    *,
+    user_text_limit: int = 400,
+    assistant_text_limit: int = 400,
+    tool_text_limit: int = 240,
+) -> List[Any]:
+    """Summarize old messages to free up context window.
+
+    Default `keep_last=8` (was 10) because tool results are the main context
+    hog — holding fewer full-fidelity turns while summarising the rest with a
+    tiny excerpt of every old tool result scales much better for long
+    coding sessions.
+    """
     if len(messages) <= keep_last + 5:
         return messages
 
@@ -1118,30 +1461,31 @@ def compact_conversation(messages: List[Any], keep_last: int = 10) -> List[Any]:
     old_msgs = non_system[:split_idx]
     recent_msgs = non_system[split_idx:]
 
-    summary_parts = []
+    summary_parts: List[str] = []
     for msg in old_msgs:
         if isinstance(msg, HumanMessage):
             text = (msg.content or "").strip()
             if text:
-                summary_parts.append(f"User: {text[:200]}")
+                summary_parts.append(f"User: {text[:user_text_limit]}")
         elif isinstance(msg, AIMessage):
             text = (msg.content or "").strip()
             if text:
-                summary_parts.append(f"Assistant: {text[:200]}")
+                summary_parts.append(f"Assistant: {text[:assistant_text_limit]}")
             if getattr(msg, "tool_calls", None):
                 for tc in msg.tool_calls:
                     n = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
                     summary_parts.append(f"  [tool call: {n}]")
         elif isinstance(msg, ToolMessage):
-            n = getattr(msg, "name", "tool")
-            summary_parts.append(f"  [tool result: {n}]")
+            summary_parts.append(
+                _compact_tool_result_for_summary(msg, per_msg_limit=tool_text_limit)
+            )
 
     summary_text = (
         "=== CONVERSATION HISTORY (compacted) ===\n"
         "The following is a summary of earlier conversation:\n\n"
-        + "\n".join(summary_parts[-40:])
+        + "\n".join(summary_parts[-60:])
         + "\n\n=== END OF HISTORY ===\n"
-        "Continue the conversation from here."
+        "Continue from here."
     )
 
     compacted = system_msgs + [HumanMessage(content=summary_text)] + recent_msgs

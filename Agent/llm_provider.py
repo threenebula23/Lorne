@@ -12,6 +12,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_openai import ChatOpenAI
 
+try:  # Preferred native client for Ollama — forwards all options to /api/chat.
+    from langchain_ollama import ChatOllama  # type: ignore
+
+    _HAS_CHAT_OLLAMA = True
+except Exception:  # pragma: no cover — package is optional at runtime.
+    ChatOllama = None  # type: ignore
+    _HAS_CHAT_OLLAMA = False
+
 ProfileName = str
 
 _CONFIG_PATH = Path.home() / ".tca_config.json"
@@ -31,6 +39,11 @@ _PROVIDER_CAPS: Dict[str, Dict[str, bool]] = {
     "arcee-ai/":    {"parallel_tool_calls": False, "native_tools": True},
     "stepfun/":     {"parallel_tool_calls": False, "native_tools": True},
     "x-ai/":        {"parallel_tool_calls": False, "native_tools": True},
+    # Local Ollama models: served via native /api/chat (ChatOllama) or /v1 (ChatOpenAI).
+    # Native tool-calling support varies by model family (qwen2.5, llama3.1, mistral-v0.3, …),
+    # but our recovery layer in message_utils handles non-native models by extracting
+    # tool calls from plain-text responses.
+    "ollama/":      {"parallel_tool_calls": False, "native_tools": True},
 }
 
 
@@ -95,6 +108,48 @@ def _ensure_v1_base_url(url: str) -> str:
     if u.endswith("/v1"):
         return u
     return u + "/v1"
+
+
+def _parse_stop_sequences(raw: Any) -> List[str]:
+    """Split a stop-sequence spec entered via UI/env into a clean list.
+
+    Priority of separators: already-a-list > newlines > commas. We can't use
+    `|` because real stop tokens contain it (e.g. `<|im_end|>`, `<|eot_id|>`).
+    Duplicates and empty strings are dropped; order is preserved.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        items = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        text = str(raw).strip()
+        if not text:
+            return []
+        if "\n" in text:
+            items = [s.strip() for s in text.splitlines() if s.strip()]
+        elif "," in text:
+            items = [s.strip() for s in text.split(",") if s.strip()]
+        else:
+            items = [text]
+
+    seen: set[str] = set()
+    out: List[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _ensure_native_base_url(url: str) -> str:
+    """Strip the trailing /v1 so ChatOllama hits native /api/chat directly."""
+    u = (url or "").strip().rstrip("/")
+    if not u:
+        return "http://localhost:11434"
+    if u.endswith("/v1"):
+        return u[:-3].rstrip("/") or "http://localhost:11434"
+    return u
 
 
 def _load_ui_model_overrides() -> Dict[str, Any]:
@@ -260,97 +315,159 @@ def normalize_profile(name: str | None) -> ProfileName:
     return aliases.get(name, "balanced")
 
 
-def get_llm(profile: str | None = None) -> Tuple[ChatOpenAI, ProfileName, str]:
+def _resolve_ollama_settings(
+    wire_model_name: str,
+    base_temperature: float,
+    base_max_tokens: int,
+) -> Dict[str, Any]:
+    """Return merged Ollama settings (url/key/generation params) for a model.
+
+    Layered defaults → preset → per-model overrides. Empty/None values never
+    override a defined layer. Suitable for both ChatOllama and the ChatOpenAI
+    fallback (caller picks which keys it can forward).
+    """
+    prefs = _load_ui_model_overrides()
+
+    base_url_raw = _env(
+        "OLLAMA_BASE_URL",
+        str(prefs.get("ollama_base_url") or _env("LOCAL_MODEL_URL", "http://localhost:11434/v1")),
+    )
+    api_key = (
+        _env("OLLAMA_API_KEY", str(prefs.get("ollama_api_key") or _env("LOCAL_MODEL_API_KEY", "ollama")))
+        or "ollama"
+    )
+
+    presets = prefs.get("ollama_presets") if isinstance(prefs.get("ollama_presets"), dict) else {}
+    model_map = (
+        prefs.get("ollama_model_settings")
+        if isinstance(prefs.get("ollama_model_settings"), dict)
+        else {}
+    )
+    raw_cfg = model_map.get(wire_model_name) if isinstance(model_map.get(wire_model_name), dict) else {}
+    preset_name = str(raw_cfg.get("preset") or "default")
+    preset_cfg = presets.get(preset_name) if isinstance(presets.get(preset_name), dict) else {}
+
+    # num_predict defaults: fall back on the profile's max_tokens so coding
+    # replies aren't truncated at the old 2048 cap mid-answer. 0 or -1 means
+    # "no limit" in Ollama — pass them through untouched.
+    try:
+        mp_default = int(base_max_tokens) if int(base_max_tokens or 0) > 0 else 8192
+    except Exception:
+        mp_default = 8192
+    merged: Dict[str, Any] = {
+        "temperature": base_temperature,
+        "top_p": 0.9,
+        "top_k": 40,
+        "repeat_penalty": 1.1,
+        "num_ctx": 32768,
+        "num_predict": mp_default,
+        "stop": "",
+    }
+    merged.update({k: v for k, v in preset_cfg.items() if v is not None})
+    merged.update({k: v for k, v in raw_cfg.items() if k != "preset" and v is not None})
+
+    stop_list = _parse_stop_sequences(merged.get("stop"))
+
+    try:
+        num_predict_final = int(merged.get("num_predict", mp_default))
+    except Exception:
+        num_predict_final = mp_default
+    # Clamp tiny values that obviously truncate the answer (≤128 tokens).
+    if 0 < num_predict_final < 128:
+        num_predict_final = mp_default
+
+    return {
+        "base_url_v1": _ensure_v1_base_url(base_url_raw),
+        "base_url_native": _ensure_native_base_url(base_url_raw),
+        "api_key": api_key,
+        "temperature": float(merged.get("temperature", base_temperature)),
+        "top_p": float(merged.get("top_p", 0.9)),
+        "top_k": int(merged.get("top_k", 40)),
+        "repeat_penalty": float(merged.get("repeat_penalty", 1.1)),
+        "num_ctx": int(merged.get("num_ctx", 32768)),
+        "num_predict": num_predict_final,
+        "stop": stop_list,
+    }
+
+
+def _build_ollama_chat_llm(wire_model_name: str, settings: Dict[str, Any]) -> Any:
+    """Instantiate ChatOllama with all Ollama-native options applied."""
+    if not _HAS_CHAT_OLLAMA or ChatOllama is None:  # defensive
+        raise RuntimeError("langchain-ollama is not installed")
+
+    kwargs: Dict[str, Any] = {
+        "model": wire_model_name,
+        "base_url": settings["base_url_native"],
+        "temperature": settings["temperature"],
+        "top_p": settings["top_p"],
+        "top_k": settings["top_k"],
+        "repeat_penalty": settings["repeat_penalty"],
+        "num_ctx": settings["num_ctx"],
+        "num_predict": settings["num_predict"],
+        # Local models can be slow on first load — give them breathing room.
+        "client_kwargs": {"timeout": 600},
+    }
+    if settings.get("stop"):
+        kwargs["stop"] = list(settings["stop"])
+    return ChatOllama(**kwargs)
+
+
+def _build_ollama_openai_llm(wire_model_name: str, settings: Dict[str, Any]) -> ChatOpenAI:
+    """Fallback: Ollama served through its OpenAI-compat /v1 endpoint.
+
+    Only OpenAI-standard parameters can be forwarded reliably; Ollama-native
+    options (num_ctx, top_k, repeat_penalty) are NOT honoured by /v1 and are
+    skipped instead of silently misleading users through a dead extra_body.
+    """
+    # Ollama's `num_predict=-1` / 0 mean "no limit"; /v1 rejects that, so
+    # fall back to a large but finite cap instead of propagating the sentinel.
+    np = int(settings.get("num_predict", 8192))
+    max_tokens = np if np > 0 else 8192
+    kwargs: Dict[str, Any] = {
+        "base_url": settings["base_url_v1"],
+        "api_key": settings["api_key"] or "ollama",
+        "model": wire_model_name,
+        "temperature": settings["temperature"],
+        "max_tokens": max_tokens,
+        "top_p": settings["top_p"],
+        # 10 min is a sensible upper bound for long local generations.
+        "request_timeout": 600,
+        # No retries — local servers either respond or they don't.
+        "max_retries": 1,
+    }
+    if settings.get("stop"):
+        # ChatOpenAI accepts `stop` as a top-level kwarg; passing via model_kwargs
+        # triggers a warning and the field gets stripped by the validator.
+        kwargs["stop"] = list(settings["stop"])
+    return ChatOpenAI(**kwargs)
+
+
+def get_llm(profile: str | None = None) -> Tuple[Any, ProfileName, str]:
     profile_name = normalize_profile(profile)
     cfg = _PROFILES[profile_name]
     model_name = str(cfg["model"])
     temperature = float(cfg["temperature"])
     max_tokens = int(cfg.get("max_tokens", 16384))
 
-    base_url = _env("TCA_BASE_URL", "https://openrouter.ai/api/v1")
-    api_key = _env("OPENROUTER_API_KEY", "")
-    wire_model_name = model_name
-    model_kwargs: Dict[str, Any] = {}
-    extra_body: Optional[Dict[str, Any]] = None
-    top_p_value: Optional[float] = None
     if model_name.startswith("ollama/"):
         wire_model_name = model_name.split("/", 1)[1]
-        prefs = _load_ui_model_overrides()
-        base_url = _ensure_v1_base_url(
-            _env(
-                "OLLAMA_BASE_URL",
-                str(prefs.get("ollama_base_url") or _env("LOCAL_MODEL_URL", "http://localhost:11434/v1")),
-            )
-        )
-        api_key = (
-            _env("OLLAMA_API_KEY", str(prefs.get("ollama_api_key") or _env("LOCAL_MODEL_API_KEY", "ollama")))
-            or "ollama"
-        )
-        presets = prefs.get("ollama_presets") if isinstance(prefs.get("ollama_presets"), dict) else {}
-        model_map = (
-            prefs.get("ollama_model_settings")
-            if isinstance(prefs.get("ollama_model_settings"), dict)
-            else {}
-        )
-        raw_cfg = model_map.get(wire_model_name) if isinstance(model_map.get(wire_model_name), dict) else {}
-        preset_name = str(raw_cfg.get("preset") or "default")
-        preset_cfg = presets.get(preset_name) if isinstance(presets.get(preset_name), dict) else {}
-        merged_cfg: Dict[str, Any] = {
-            "temperature": 0.2,
-            "top_p": 0.9,
-            "top_k": 40,
-            "repeat_penalty": 1.1,
-            "num_ctx": 32768,
-            "num_predict": 2048,
-            "stop": "",
-        }
-        merged_cfg.update({k: v for k, v in preset_cfg.items() if v is not None})
-        merged_cfg.update({k: v for k, v in raw_cfg.items() if k != "preset" and v is not None})
-        if "temperature" in merged_cfg:
-            temperature = float(merged_cfg["temperature"])
-            # ChatOpenAI already receives top-level temperature; avoid duplicate validation error.
-            merged_cfg.pop("temperature", None)
-        if "num_predict" in merged_cfg:
-            max_tokens = int(merged_cfg["num_predict"])
-            # Keep one source of truth for max generated tokens.
-            merged_cfg.pop("num_predict", None)
-        if "top_p" in merged_cfg:
-            try:
-                top_p_value = float(merged_cfg["top_p"])
-            except Exception:
-                top_p_value = None
-            merged_cfg.pop("top_p", None)
-        ollama_options: Dict[str, Any] = {}
-        for k in ("top_k", "repeat_penalty", "num_ctx"):
-            if k in merged_cfg:
-                ollama_options[k] = merged_cfg.pop(k)
-        stop_raw = str(merged_cfg.get("stop") or "").strip()
-        if stop_raw:
-            merged_cfg["stop"] = [s.strip() for s in stop_raw.split("|") if s.strip()]
+        settings = _resolve_ollama_settings(wire_model_name, temperature, max_tokens)
+        if _HAS_CHAT_OLLAMA:
+            llm = _build_ollama_chat_llm(wire_model_name, settings)
         else:
-            merged_cfg.pop("stop", None)
-        if ollama_options:
-            extra_body = {"options": ollama_options}
-        model_kwargs.update(merged_cfg)
+            llm = _build_ollama_openai_llm(wire_model_name, settings)
+        return llm, profile_name, model_name
 
-    llm_kwargs: Dict[str, Any] = {
-        "base_url": base_url,
-        "api_key": api_key,
-        "model": wire_model_name,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "request_timeout": 120,
-        "max_retries": 3,
-    }
-    if top_p_value is not None:
-        llm_kwargs["top_p"] = top_p_value
-    if extra_body:
-        llm_kwargs["extra_body"] = extra_body
-    if model_kwargs:
-        llm_kwargs["model_kwargs"] = model_kwargs
-
+    base_url = _env("TCA_BASE_URL", "https://openrouter.ai/api/v1")
+    api_key = _env("OPENROUTER_API_KEY", "")
     llm = ChatOpenAI(
-        **llm_kwargs,
+        base_url=base_url,
+        api_key=api_key,
+        model=model_name,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        request_timeout=120,
+        max_retries=3,
     )
     return llm, profile_name, model_name
 

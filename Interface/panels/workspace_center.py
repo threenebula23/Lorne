@@ -78,6 +78,7 @@ class SettingsWorkspacePane(Vertical):
     @on(Button.Pressed)
     def _on_toolbar_button(self, event: Button.Pressed) -> None:
         if event.button.id == self._close_btn_id:
+            event.stop()
             self.post_message(CloseWorkspaceTab(self._close_tab_id))
 
 
@@ -140,17 +141,28 @@ class WorkspaceCenter(Vertical):
             pass
 
     def close_active_settings_tab(self) -> bool:
-        """Close the active tab if it is a settings tab. Returns True if closed."""
+        """Close the active settings tab, or any open settings tab as a fallback.
+
+        Returns True if at least one settings tab was closed.
+        """
         tabs = self._tabs()
         aid = tabs.active
-        if not aid or not str(aid).startswith("ws-settings-"):
-            return False
-        self.close_tab_by_id(aid)
+        closed_any = False
+        if aid and str(aid).startswith("ws-settings-"):
+            self.close_tab_by_id(aid)
+            closed_any = True
+        # If nothing was active (or the user was on the chat tab) we still
+        # close every lingering settings tab — otherwise the "Close" button in
+        # the left panel appears to do nothing and the user re-opens the same
+        # section thinking it was broken.
+        for sec, tid in list(self._settings_section_to_tab.items()):
+            self.close_tab_by_id(tid)
+            closed_any = True
         try:
             tabs.active = CHAT_TAB_ID
         except Exception:
             pass
-        return True
+        return closed_any
 
     def open_path(self, path: Path) -> None:
         p = path.resolve()

@@ -1,9 +1,10 @@
 try:
     from .file_ops import (
-        read_file, list_files, edit_file, search_in_files, write_file,
-        replace_file_lines, insert_file_lines, get_file_line_count,
+        read_file, read_file_lines, list_files, edit_file, search_in_files,
+        write_file, replace_file_lines, insert_file_lines, get_file_line_count,
     )
     from .terminal_tool import run_command
+    from .download_tool import download_file, cancel_download
     from .pdf_tool import create_pdf
     from .interactive import ask_user
     from .code_gen import create_code_file, append_code_snippet
@@ -35,10 +36,11 @@ try:
     )
 except ImportError:
     from Agent.tools.file_ops import (
-        read_file, list_files, edit_file, search_in_files, write_file,
-        replace_file_lines, insert_file_lines, get_file_line_count,
+        read_file, read_file_lines, list_files, edit_file, search_in_files,
+        write_file, replace_file_lines, insert_file_lines, get_file_line_count,
     )
     from Agent.tools.terminal_tool import run_command
+    from Agent.tools.download_tool import download_file, cancel_download
     from Agent.tools.pdf_tool import create_pdf
     from Agent.tools.interactive import ask_user
     from Agent.tools.code_gen import create_code_file, append_code_snippet
@@ -70,9 +72,11 @@ except ImportError:
     )
 
 __all__ = [
-    "read_file", "list_files", "edit_file", "search_in_files", "write_file",
+    "read_file", "read_file_lines",
+    "list_files", "edit_file", "search_in_files", "write_file",
     "replace_file_lines", "insert_file_lines", "get_file_line_count",
-    "run_command", "create_pdf", "ask_user",
+    "run_command", "download_file", "cancel_download",
+    "create_pdf", "ask_user",
     "create_code_file", "append_code_snippet",
     "save_plan", "load_plan", "update_plan", "clear_plan",
     "list_file_versions", "rollback_file",

@@ -19,7 +19,22 @@ Header {
     height: 1;
     background: #1a1a2e;
     layout: horizontal;
-    padding: 0;
+    padding: 0 0 0 1;
+    align-horizontal: left;
+}
+
+#app-chat-btn {
+    height: 1;
+    min-width: 10;
+    background: #8B5CF6;
+    color: #ffffff;
+    text-style: bold;
+    border: none;
+    margin: 0 0 0 2;
+}
+
+#app-chat-btn:hover {
+    background: #A78BFA;
 }
 
 #app-exit-btn {

@@ -184,19 +184,26 @@ def _sync_tui_tool_bundle(is_agent: bool) -> None:
     global tools
     pw = False
     bw = True
-    if is_agent:
-        try:
-            from Interface.ui_prefs import load_prefs
-            prefs = load_prefs()
+    ct = True
+    try:
+        from Interface.ui_prefs import load_prefs
+        prefs = load_prefs()
+        ct = bool(prefs.get("custom_tools_enabled", True))
+        if is_agent:
             pw = bool(prefs.get("playwright_python_enabled", False))
             bw = bool(prefs.get("browser_tools_enabled", True))
-        except Exception:
-            pw = False
-            bw = True
+    except Exception:
+        pass
     try:
         from Agent.tool_registry import set_tool_session_prefs, build_tools
-        set_tool_session_prefs(agent_mode=is_agent, playwright_python=pw, browser_tools=bw)
-        fresh, _cust = build_tools(agent_mode=is_agent, playwright_python=pw, browser_tools=bw)
+        set_tool_session_prefs(
+            agent_mode=is_agent, playwright_python=pw, browser_tools=bw,
+            custom_tools=ct,
+        )
+        fresh, _cust = build_tools(
+            agent_mode=is_agent, playwright_python=pw, browser_tools=bw,
+            custom_tools=ct,
+        )
         tools.clear()
         tools.extend(fresh)
         _refresh_runtime_tools()
@@ -207,11 +214,31 @@ def _sync_tui_tool_bundle(is_agent: bool) -> None:
 _SKIP_DIRS = {
     ".git", ".idea", "__pycache__", "node_modules", ".venv", "venv",
     "env", ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
-    ".next", ".nuxt",
+    ".next", ".nuxt", ".cache", ".ruff_cache", "target", "out",
+    "coverage", ".turbo", ".parcel-cache",
 }
 
+# Prompt-overhead budget for the project tree: keep the system message
+# lean so we don't burn ~1.2k tokens per LLM call on a file listing that
+# the model can always refetch via list_files.
+_PROJECT_MAX_CHARS = 1800
+_PROJECT_MAX_DEPTH = 2
+_PROJECT_MAX_ENTRIES_PER_DIR = 25
 
-def analyze_project_structure(root_path: Optional[Path] = None) -> str:
+
+def analyze_project_structure(
+    root_path: Optional[Path] = None,
+    *,
+    max_chars: int = _PROJECT_MAX_CHARS,
+    max_depth: int = _PROJECT_MAX_DEPTH,
+    max_entries_per_dir: int = _PROJECT_MAX_ENTRIES_PER_DIR,
+) -> str:
+    """Build a compact tree of the project for the system prompt.
+
+    Designed to stay under ~600 tokens: depth-limited, no per-file sizes,
+    truncation of oversized directories and a hard character cap at the
+    end. The model can always recover detail via `list_files`/`read_file`.
+    """
     if root_path is None:
         root_path = Path.cwd()
 
@@ -220,7 +247,7 @@ def analyze_project_structure(root_path: Optional[Path] = None) -> str:
     total_files = 0
     total_dirs = 0
 
-    def _tree(directory: Path, prefix: str = "", depth: int = 0, max_depth: int = 3):
+    def _tree(directory: Path, prefix: str = "", depth: int = 0):
         nonlocal total_files, total_dirs
         if depth > max_depth:
             return
@@ -230,45 +257,76 @@ def analyze_project_structure(root_path: Optional[Path] = None) -> str:
             return
 
         visible = [i for i in items if i.name not in _SKIP_DIRS and not i.name.startswith(".")]
-        for idx, item in enumerate(visible):
-            is_last = idx == len(visible) - 1
+        shown = visible[:max_entries_per_dir]
+        hidden = len(visible) - len(shown)
+        for idx, item in enumerate(shown):
+            is_last = idx == len(shown) - 1 and hidden == 0
             connector = "└── " if is_last else "├── "
             extension = "    " if is_last else "│   "
             try:
                 if item.is_dir():
                     total_dirs += 1
                     lines.append(f"{prefix}{connector}{item.name}/")
-                    try:
-                        _tree(item, prefix + extension, depth + 1, max_depth)
-                    except OSError:
-                        lines.append(f"{prefix}{extension}    … (каталог недоступен)")
+                    if depth < max_depth:
+                        try:
+                            _tree(item, prefix + extension, depth + 1)
+                        except OSError:
+                            lines.append(f"{prefix}{extension}    … (каталог недоступен)")
                 else:
                     try:
-                        st = item.stat()
+                        item.stat()
                     except OSError:
-                        lines.append(
-                            f"{prefix}{connector}{item.name} (недоступно)",
-                        )
+                        lines.append(f"{prefix}{connector}{item.name} (недоступно)")
                         continue
                     total_files += 1
                     suffix = item.suffix or "(no ext)"
                     file_types[suffix] = file_types.get(suffix, 0) + 1
-                    size_kb = st.st_size / 1024
-                    size_str = (
-                        f"{size_kb:.1f}KB" if size_kb >= 1 else f"{st.st_size}B"
-                    )
-                    lines.append(f"{prefix}{connector}{item.name} ({size_str})")
+                    # no sizes — saves ~400 tok per turn, and sizes add no
+                    # signal the agent actually acts on.
+                    lines.append(f"{prefix}{connector}{item.name}")
             except OSError:
                 lines.append(f"{prefix}{connector}{item.name} (недоступно)")
+        if hidden > 0:
+            lines.append(f"{prefix}└── … ({hidden} ещё — используй list_files)")
 
     _tree(root_path)
 
     lines.append(f"\nStats: {total_files} files, {total_dirs} directories")
     if file_types:
-        top_types = sorted(file_types.items(), key=lambda x: x[1], reverse=True)[:8]
+        top_types = sorted(file_types.items(), key=lambda x: x[1], reverse=True)[:6]
         lines.append("Types: " + ", ".join(f"{ext}: {cnt}" for ext, cnt in top_types))
 
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[: max_chars - 80].rstrip() + (
+            "\n… [обрезано для экономии контекста — используй list_files для подробностей]"
+        )
+    return text
+
+
+def _build_session_system_prompt(
+    base_prompt: str,
+    custom_tools_section: str,
+    project_structure: str,
+) -> str:
+    """Assemble the system message shown once per session.
+
+    Kept in a helper so the three call sites stay in sync — and the format
+    stays compact (no duplicated tool-name list, no verbose session blurb).
+    """
+    sections = [base_prompt.rstrip()]
+    ct = (custom_tools_section or "").strip()
+    if ct:
+        sections.append(ct)
+    ps = (project_structure or "").strip()
+    if ps:
+        sections.append("=== КОНТЕКСТ ПРОЕКТА ===\n" + ps)
+    sections.append(
+        "=== СЕССИЯ ===\n"
+        "Состояние сохраняется между запусками (SQLite checkpoint). "
+        "Для поиска по документам — rag_search."
+    )
+    return "\n\n".join(sections) + "\n"
 
 
 # ─── LLM init ──────────────────────────────────────────────────────
@@ -374,26 +432,11 @@ def run_coding_agent_loop():
     project_structure = analyze_project_structure()
 
     custom_tools_section = get_custom_tools_prompt()
-    tool_names = sorted(str(getattr(t, "name", "")) for t in tools if getattr(t, "name", ""))
-    tool_names_block = ", ".join(tool_names)
-    enhanced_system_prompt = f"""{SYSTEM_PROMPT}
-{custom_tools_section}
-
-=== ДОСТУПНЫЕ ИМЕНА ИНСТРУМЕНТОВ (ТОЛЬКО ИХ МОЖНО ВЫЗЫВАТЬ) ===
-{tool_names_block}
-Не выдумывай имена вроде create_file: если нужно создать файл, используй write_file или code_file_tool(action="create").
-
-=== КОНТЕКСТ ПРОЕКТА ===
-{project_structure}
-
-=== ИНСТРУКЦИИ СЕССИИ ===
-Ты знаешь структуру проекта. Используй это для:
-1. Понимания какие файлы упоминаются
-2. Навигации по проекту
-3. Работы с существующими паттернами кодовой базы
-
-Состояние сессии сохраняется между запусками (SQLite checkpoint). Используй rag_search для поиска по документам.
-"""
+    # Tool names are already in the JSON schemas bound to the LLM; duplicating
+    # them here used to add ~200 tok/turn with no benefit. Keep the prompt lean.
+    enhanced_system_prompt = _build_session_system_prompt(
+        SYSTEM_PROMPT, custom_tools_section, project_structure
+    )
 
     # Session selection
     sessions = list_sessions(limit=18)
@@ -640,8 +683,10 @@ def run_coding_agent_loop():
 
         # Auto-compact if approaching context limit
         non_system_count = len([m for m in messages if not isinstance(m, SystemMessage)])
-        if non_system_count > 30:
-            messages = compact_conversation(messages, keep_last=10)
+        # Trigger earlier + keep fewer recent turns — tool results
+        # (file reads, web fetches) are the dominant cost for long sessions.
+        if non_system_count > 20:
+            messages = compact_conversation(messages, keep_last=8)
             cmd_ctx["messages"] = messages
             print_info("Авто-сжатие разговора для освобождения контекста")
 
@@ -669,9 +714,22 @@ def run_coding_agent_loop():
             continue
         else:
             if research_mode_active[0] and not user_input.startswith("/"):
+                try:
+                    from Interface.ui_prefs import load_prefs as _load_prefs
+                    _rp = _load_prefs()
+                    _src = int(_rp.get("research_max_sources", 6) or 6)
+                    _rounds = int(_rp.get("research_max_rounds", 3) or 3)
+                    _deep = bool(_rp.get("research_deep_fetch", True))
+                except Exception:
+                    _src, _rounds, _deep = 6, 3, True
+                fetch_hint = (
+                    "; при необходимости углубляйся в источники через web_fetch"
+                    if _deep else "; без глубокого web_fetch, только web_search"
+                )
                 user_input = (
                     "[RESEARCH MODE ACTIVE]\n"
-                    "Используй web_search/web_fetch и ответь с источниками.\n\n"
+                    f"Используй web_search (до {_src} источников, {_rounds} раундов уточнения){fetch_hint}.\n"
+                    "Ответь с источниками в формате [N] url.\n\n"
                     + user_input
                 )
             if _should_autoplan(user_input):
@@ -788,22 +846,9 @@ def run_tui_mode():
     project_structure = analyze_project_structure()
 
     custom_tools_section = get_custom_tools_prompt()
-    tool_names = sorted(str(getattr(t, "name", "")) for t in tools if getattr(t, "name", ""))
-    tool_names_block = ", ".join(tool_names)
-    enhanced_system_prompt = f"""{SYSTEM_PROMPT}
-{custom_tools_section}
-
-=== ДОСТУПНЫЕ ИМЕНА ИНСТРУМЕНТОВ (ТОЛЬКО ИХ МОЖНО ВЫЗЫВАТЬ) ===
-{tool_names_block}
-Не выдумывай имена вроде create_file: если нужно создать файл, используй write_file или code_file_tool(action="create").
-
-=== КОНТЕКСТ ПРОЕКТА ===
-{project_structure}
-
-=== ИНСТРУКЦИИ СЕССИИ ===
-Ты знаешь структуру проекта. Используй это для навигации и работы с кодовой базой.
-Используй rag_search для поиска по документам. Для записи рассуждений в панель — reasoning_tool(action='think', thought='...').
-"""
+    enhanced_system_prompt = _build_session_system_prompt(
+        SYSTEM_PROMPT, custom_tools_section, project_structure
+    )
 
     session_id = ""
     messages: List[Any] = []
@@ -892,6 +937,47 @@ def run_tui_mode():
 
         if not text.strip():
             text = "Продолжи, сделай следующий шаг если нужно."
+
+        # Deep Solver singleton: if a run is already active in this process,
+        # a new submit must NOT spin up a second concurrent Deep loop. We
+        # instead push the user's text into the live loop's inbox; it will
+        # be pulled on the next iteration as a "[user interjection]" and
+        # treated as a clarification of the same main goal (no second run,
+        # no restart, no "agent started" spam).
+        try:
+            from Agent.deep_solver import is_running as _deep_is_running
+            from Agent.deep_solver import submit_user_message as _deep_push
+        except Exception:  # pragma: no cover
+            _deep_is_running = lambda: False  # type: ignore
+            _deep_push = lambda _t: False  # type: ignore
+
+        if _deep_is_running():
+            display_plain = ((bubble_text or "").strip() or text)
+            user_turn_idx = sum(1 for m in messages if isinstance(m, HumanMessage))
+            messages.append(HumanMessage(content=text))
+            try:
+                bridge.on_chat_user_message(display_plain, user_turn_idx)
+            except Exception:
+                pass
+            delivered = _deep_push(text)
+            try:
+                if delivered:
+                    bridge.on_info(
+                        "📨 Сообщение добавлено в очередь Deep Solver — "
+                        "агент учтёт его на следующем шаге без перезапуска."
+                    )
+                else:
+                    bridge.on_warning(
+                        "Не удалось передать сообщение в Deep Solver, сессия "
+                        "уже завершается."
+                    )
+            except Exception:
+                pass
+            try:
+                save_state(messages, session_id=session_id)
+            except Exception:
+                pass
+            return
 
         def _do_work():
             nonlocal messages
@@ -985,6 +1071,39 @@ def run_tui_mode():
                         bridge.on_error(f"Creator error: {ce}")
                     finally:
                         bridge.on_agent_done()
+                elif mode == "deep":
+                    bridge.on_agent_start()
+                    try:
+                        try:
+                            from Agent.deep_solver import run_deep_solver
+                        except Exception:
+                            from .deep_solver import run_deep_solver  # type: ignore
+                        summary = run_deep_solver(
+                            task=text,
+                            tools=tools,
+                            bridge=bridge,
+                            project_context=project_structure,
+                            session_id=session_id,
+                            messages=messages,
+                        )
+                        if summary:
+                            messages.append(AIMessage(content=summary))
+                            bridge.on_model_reply(
+                                summary,
+                                {
+                                    "prompt_tokens": 0,
+                                    "completion_tokens": max(1, len(summary) // 3),
+                                    "_estimated": True,
+                                },
+                            )
+                    except Exception as de:
+                        bridge.on_error(f"Deep solver error: {de}")
+                    finally:
+                        bridge.on_agent_done()
+                    try:
+                        save_state(messages, session_id=session_id)
+                    except Exception:
+                        pass
                     try:
                         save_state(messages, session_id=session_id)
                         if not title_flag[0]:
@@ -1023,7 +1142,11 @@ def run_tui_mode():
         bridge_ref.clear_stop()
         bridge_ref.on_agent_start()
         try:
-            cumulative = {"input_tokens": 0, "output_tokens": 0}
+            from Agent.message_utils import extract_message_usage
+            # last_usage tracks the most recent LLM call's prompt+completion so
+            # the context meter reflects actual window fill, not a sum of every
+            # tool-loop iteration (which would double-count history).
+            last_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
             for state in agent_graph.stream({"messages": msgs}, stream_mode="values"):
                 if bridge_ref.is_stop_requested():
                     bridge_ref.on_warning("Agent stopped by user")
@@ -1033,26 +1156,22 @@ def run_tui_mode():
                 new_msgs = msgs[old_len:]
                 for msg in new_msgs:
                     if isinstance(msg, AIMessage):
-                        meta = getattr(msg, "response_metadata", {}) or {}
-                        usage = meta.get("usage", meta.get("token_usage", {}))
-                        if isinstance(usage, dict):
-                            inp = usage.get("prompt_tokens", usage.get("input_tokens", 0))
-                            out = usage.get("completion_tokens", usage.get("output_tokens", 0))
-                            cumulative["input_tokens"] += inp
-                            cumulative["output_tokens"] += out
-                            total_used = cumulative["input_tokens"] + cumulative["output_tokens"]
+                        u = extract_message_usage(msg)
+                        if u.get("input_tokens") or u.get("output_tokens"):
+                            last_usage = u
+                            total_used = (
+                                u.get("total_tokens")
+                                or (u.get("input_tokens", 0) + u.get("output_tokens", 0))
+                            )
                             bridge_ref.on_context_update(total_used, CONTEXT_LIMIT)
 
                         content = str(msg.content or "").strip()
                         usage_out: Dict[str, Any] = {}
-                        if isinstance(usage, dict):
-                            inp = usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
-                            out = usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
-                            if inp or out:
-                                usage_out = {
-                                    "prompt_tokens": int(inp),
-                                    "completion_tokens": int(out),
-                                }
+                        if u.get("input_tokens") or u.get("output_tokens"):
+                            usage_out = {
+                                "prompt_tokens": int(u.get("input_tokens", 0)),
+                                "completion_tokens": int(u.get("output_tokens", 0)),
+                            }
                         if content:
                             try:
                                 from Agent.message_utils import extract_thought_segments
@@ -1102,6 +1221,19 @@ def run_tui_mode():
             try:
                 set_model(model_id)
                 _init_llm()
+                # Push the freshly-resolved context window to the UI so
+                # the meter shows the real num_ctx of the picked model
+                # immediately — otherwise local Ollama models (which
+                # often don't return usage stats) would keep displaying
+                # the previous model's window until the first assistant
+                # reply arrived.
+                try:
+                    bridge.on_context_update(0, CONTEXT_LIMIT)
+                    bridge.on_info(
+                        f"🧠 Модель: {MODEL_NAME}  ·  окно ~{CONTEXT_LIMIT:,} ток."
+                    )
+                except Exception:
+                    pass
             except Exception as e:
                 bridge.on_error(f"Model error: {e}")
         threading.Thread(target=_work, daemon=True).start()
@@ -1109,7 +1241,7 @@ def run_tui_mode():
     def handle_mode_toggle(mode: str):
         """Called when user changes the agent mode."""
         mode_lower = (mode or "normal").lower() if isinstance(mode, str) else "normal"
-        if mode_lower not in ("normal", "creator", "research", "agent"):
+        if mode_lower not in ("normal", "creator", "research", "agent", "deep"):
             mode_lower = "normal"
         tui_agent_mode[0] = mode_lower
         creator_mode_active[0] = mode_lower == "creator"
@@ -1166,6 +1298,42 @@ def run_tui_mode():
         except Exception:
             pass
 
+    def handle_deep_checkpoint(cp_id: str, action: str) -> None:
+        """Rollback/continue from a Deep Solver checkpoint card."""
+        def _work() -> None:
+            try:
+                try:
+                    from Agent.deep_solver import apply_checkpoint_action
+                except Exception:
+                    from .deep_solver import apply_checkpoint_action  # type: ignore
+                br = bridge_ref[0]
+                res = apply_checkpoint_action(
+                    cp_id=cp_id, action=action,
+                    messages=messages,
+                    enhanced_system_prompt=enhanced_system_prompt,
+                    session_id=session_id,
+                    bridge=br,
+                )
+                if not res.get("ok"):
+                    if br:
+                        br.on_error(f"Deep checkpoint: {res.get('error')}")
+                    return
+                if br:
+                    if action == "continue":
+                        label = res.get("checkpoint_title") or f"checkpoint {cp_id[:8]}"
+                        br.on_deep_context_chip(cp_id, label)
+                        br.on_info(
+                            f"Продолжаем с чекпоинта «{label}» — задай следующий шаг."
+                        )
+                    else:
+                        br.on_info("Откат к чекпоинту выполнен.")
+            except Exception as e:
+                br = bridge_ref[0]
+                if br:
+                    br.on_error(f"Deep checkpoint error: {e}")
+
+        threading.Thread(target=_work, daemon=True).start()
+
     app = TCAApp(
         model_name=MODEL_NAME,
         branch=git_branch,
@@ -1176,6 +1344,7 @@ def run_tui_mode():
         on_session_resolved=apply_session_pick,
         on_chat_rollback=handle_rollback,
         on_app_close=handle_app_close,
+        on_deep_checkpoint=handle_deep_checkpoint,
     )
     bridge = TUIBridge(app)
     bridge_ref[0] = bridge

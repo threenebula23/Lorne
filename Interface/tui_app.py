@@ -28,7 +28,7 @@ from .panels.active_agents_panel import (
 )
 from .panels.ai_chat import (
     AIChatPanel, ChatSubmitted, ModelChanged, ModeToggled, StopRequested,
-    RollbackRequested,
+    RollbackRequested, DeepCheckpointAction,
 )
 from .session_picker_screen import SessionPickerScreen
 
@@ -65,6 +65,7 @@ class TCAApp(App):
         on_session_resolved: Optional[Callable[[Dict[str, Any]], None]] = None,
         on_chat_rollback: Optional[Callable[[int], None]] = None,
         on_app_close: Optional[Callable[[], None]] = None,
+        on_deep_checkpoint: Optional[Callable[[str, str], None]] = None,
         require_session_picker: bool = True,
         **kwargs,
     ):
@@ -78,6 +79,7 @@ class TCAApp(App):
         self._on_session_resolved = on_session_resolved
         self._on_chat_rollback = on_chat_rollback
         self._on_app_close = on_app_close
+        self._on_deep_checkpoint = on_deep_checkpoint
         self._require_session_picker = require_session_picker
         self._bridge = None
         self._left_width = 28
@@ -132,6 +134,7 @@ class TCAApp(App):
         yield Header()
         with Horizontal(id="top-bar"):
             yield Button("✕ Exit", id="app-exit-btn")
+            yield Button("💬 Chat", id="app-chat-btn", variant="primary")
         with Horizontal(id="main"):
             with Vertical(id="col-left"):
                 yield FileExplorerPanel(id="file-explorer")
@@ -258,6 +261,22 @@ class TCAApp(App):
     def _app_on_sa_playwright(self, event: Checkbox.Changed) -> None:
         self.chat.on_sa_playwright(event)
 
+    @on(Checkbox.Changed, "#sa-custom-tools")
+    def _app_on_sa_custom_tools(self, event: Checkbox.Changed) -> None:
+        self.chat.on_sa_custom_tools(event)
+
+    @on(Checkbox.Changed, "#sa-research-deep-fetch")
+    def _app_on_sa_research_deep_fetch(self, event: Checkbox.Changed) -> None:
+        self.chat.on_sa_research_deep_fetch(event)
+
+    @on(Select.Changed, "#sa-orch-mode")
+    def _app_on_sa_orch_mode(self, event: Select.Changed) -> None:
+        self.chat.on_sa_orch_mode(event)
+
+    @on(Button.Pressed, "#sa-apply")
+    def _app_on_sa_apply(self) -> None:
+        self.chat.on_sa_apply()
+
     @on(Button.Pressed, "#sor-save-key")
     def _app_on_sor_save_key(self) -> None:
         self.chat.on_sor_save_key()
@@ -307,6 +326,22 @@ class TCAApp(App):
         if self._on_chat_rollback:
             self._on_chat_rollback(event.turn_index)
 
+    @on(DeepCheckpointAction)
+    def on_deep_checkpoint_action(self, event: DeepCheckpointAction) -> None:
+        """Forward a Deep Solver checkpoint button click to the agent side.
+
+        The agent owns the ``apply_checkpoint_action`` handler because it
+        needs live references to ``messages`` and the enhanced system
+        prompt; the TUI just relays the intent. On 'continue' the agent
+        also mounts a context chip via the bridge.
+        """
+        handler = getattr(self, "_on_deep_checkpoint", None)
+        if handler:
+            try:
+                handler(event.cp_id, event.action)
+            except Exception:
+                pass
+
     @on(ChatSubmitted)
     def on_chat_message(self, event: ChatSubmitted) -> None:
         text = event.text
@@ -353,6 +388,17 @@ class TCAApp(App):
     def on_exit_click(self) -> None:
         self._run_shutdown_hooks()
         self.exit()
+
+    @on(Button.Pressed, "#app-chat-btn")
+    def on_chat_picker_click(self) -> None:
+        """Open the existing session picker screen (same one used at startup)."""
+        try:
+            from Agent.checkpoint import list_sessions
+
+            rows = list_sessions(limit=80)
+        except Exception:
+            rows = []
+        self.push_screen(SessionPickerScreen(rows), self._on_session_picker_result)
 
     def action_quit(self) -> None:
         self._run_shutdown_hooks()

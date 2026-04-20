@@ -210,16 +210,13 @@ class FileExplorerPanel(Vertical):
     def on_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         self.post_message(FileSelected(event.path))
 
-    @on(DirectoryTree.DirectorySelected)
-    def on_dir_selected(self, event: DirectoryTree.DirectorySelected) -> None:
-        try:
-            node = event.node
-            if node.is_expanded:
-                node.collapse()
-            else:
-                node.expand()
-        except Exception:
-            pass
+    # NB: We intentionally do NOT add a handler for
+    # ``DirectoryTree.DirectorySelected`` here. Textual's built-in tree
+    # already toggles expand/collapse on select, so if we call
+    # ``node.expand()``/``node.collapse()`` from our own handler the folder
+    # reopens immediately after the user tries to close it (double-toggle).
+    # Relying on the default behaviour makes click-to-collapse actually
+    # stick.
 
     @on(Button.Pressed)
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -265,6 +262,7 @@ class FileExplorerPanel(Vertical):
         elif btn_id.startswith("fe-open-settings-"):
             section = btn_id.replace("fe-open-settings-", "", 1).strip().lower()
             if section:
+                event.stop()
                 self.post_message(OpenChatSettings(section))
 
     @on(Select.Changed, "#fe-theme-select")
@@ -350,7 +348,7 @@ class FileExplorerPanel(Vertical):
 
     def _fe_check_balance(self) -> None:
         display = self.query_one("#fe-balance-display", Static)
-        display.update(Text("Проверка…", style="#F59E0B"))
+        display.update(Text("Проверка…", style="#6B7280"))
 
         def _check():
             try:
@@ -580,9 +578,11 @@ def _update_env_file(path: Path, key: str, value: str) -> None:
 
 from textual.screen import ModalScreen
 
+from Interface.modal_style import MODAL_SHARED_CSS, apply_accent_to
+
 
 class _InputDialog(ModalScreen):
-    DEFAULT_CSS = """
+    DEFAULT_CSS = MODAL_SHARED_CSS + """
     _InputDialog { align: center middle; }
     #dialog-container {
         width: 88;
@@ -590,26 +590,17 @@ class _InputDialog(ModalScreen):
         max-width: 96%;
         height: auto;
         max-height: 90%;
-        background: #1a1a2e;
-        border: solid #8B5CF6;
-        padding: 1 2;
     }
-    #dialog-scroll {
-        height: auto;
-        max-height: 28;
-        min-height: 2;
-        margin: 0 0 1 0;
-        border: solid #2D2D3D;
-        background: #12121a;
-    }
-    #dialog-scroll Static {
+    #dialog-title {
         height: auto;
     }
+    #dialog-scroll Static { height: auto; }
     #dialog-container Input {
         width: 100%;
-        background: #151520;
+        background: #0D0D0D;
         color: #E5E7EB;
         border: solid #2D2D3D;
+        margin: 0;
     }
     """
 
@@ -620,12 +611,19 @@ class _InputDialog(ModalScreen):
         self._default = default
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="dialog-container"):
-            with VerticalScroll(id="dialog-scroll"):
+        with Vertical(id="dialog-container", classes="modal-card"):
+            yield Label("Введите значение", id="dialog-title", classes="modal-title")
+            with VerticalScroll(id="dialog-scroll", classes="modal-scroll"):
                 yield Static(Markdown(self._prompt or " "), shrink=False)
             yield Input(value=self._default, id="dialog-input")
 
     def on_mount(self) -> None:
+        apply_accent_to(
+            self,
+            container_id="dialog-container",
+            title_id="dialog-title",
+            title_text="Введите значение",
+        )
         self.query_one("#dialog-input", Input).focus()
 
     @on(Input.Submitted, "#dialog-input")
@@ -636,7 +634,7 @@ class _InputDialog(ModalScreen):
 
 
 class _ConfirmDialog(ModalScreen):
-    DEFAULT_CSS = """
+    DEFAULT_CSS = MODAL_SHARED_CSS + """
     _ConfirmDialog { align: center middle; }
     #confirm-container {
         width: 88;
@@ -644,23 +642,11 @@ class _ConfirmDialog(ModalScreen):
         max-width: 96%;
         height: auto;
         max-height: 90%;
-        background: #1a1a2e;
-        border: solid #8B5CF6;
-        padding: 1 2;
     }
-    #confirm-scroll {
-        height: auto;
-        max-height: 32;
-        min-height: 3;
-        margin: 0 0 1 0;
-        border: solid #2D2D3D;
-        background: #12121a;
-    }
-    #confirm-scroll Static {
+    #confirm-title {
         height: auto;
     }
-    #confirm-buttons { layout: horizontal; height: 3; align: center middle; }
-    #confirm-buttons Button { min-width: 14; margin: 0 1; }
+    #confirm-scroll Static { height: auto; }
     """
 
     def __init__(self, prompt: str, detail: str = "", callback=None):
@@ -673,14 +659,21 @@ class _ConfirmDialog(ModalScreen):
         body = (self._prompt or "").strip()
         if (self._detail or "").strip():
             body += "\n\n```\n" + (self._detail or "").strip() + "\n```"
-        with Vertical(id="confirm-container"):
-            with VerticalScroll(id="confirm-scroll"):
+        with Vertical(id="confirm-container", classes="modal-card"):
+            yield Label("Подтвердите действие", id="confirm-title", classes="modal-title")
+            with VerticalScroll(id="confirm-scroll", classes="modal-scroll"):
                 yield Static(Markdown(body or " "), shrink=False)
-            with Horizontal(id="confirm-buttons"):
-                yield Button("Yes", id="confirm-yes", variant="success")
-                yield Button("No", id="confirm-no", variant="error")
+            with Horizontal(id="confirm-buttons", classes="modal-footer"):
+                yield Button("Да", id="confirm-yes", variant="success")
+                yield Button("Нет", id="confirm-no", variant="error")
 
     def on_mount(self) -> None:
+        apply_accent_to(
+            self,
+            container_id="confirm-container",
+            title_id="confirm-title",
+            title_text="Подтвердите действие",
+        )
         try:
             self.query_one("#confirm-yes", Button).focus()
         except Exception:
@@ -702,7 +695,7 @@ class _ConfirmDialog(ModalScreen):
 class _AskUserDialog(ModalScreen):
     """Вопрос агенту: Yes / No / свой текст (поле ввода)."""
 
-    DEFAULT_CSS = """
+    DEFAULT_CSS = MODAL_SHARED_CSS + """
     _AskUserDialog { align: center middle; }
     #askud-container {
         width: 88;
@@ -710,28 +703,16 @@ class _AskUserDialog(ModalScreen):
         max-width: 96%;
         height: auto;
         max-height: 90%;
-        background: #1a1a2e;
-        border: solid #8B5CF6;
-        padding: 1 2;
     }
-    #askud-scroll {
-        height: auto;
-        max-height: 30;
-        min-height: 3;
-        margin: 0 0 1 0;
-        border: solid #2D2D3D;
-        background: #12121a;
-    }
+    #askud-title { height: auto; }
     #askud-scroll Static { height: auto; }
     #askud-custom {
         width: 100%;
         margin: 0 0 1 0;
-        background: #151520;
+        background: #0D0D0D;
         color: #E5E7EB;
         border: solid #2D2D3D;
     }
-    #askud-buttons { layout: horizontal; height: 3; }
-    #askud-buttons Button { min-width: 12; margin: 0 1 0 0; }
     """
 
     def __init__(self, question: str, callback) -> None:
@@ -740,16 +721,23 @@ class _AskUserDialog(ModalScreen):
         self._callback = callback
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="askud-container"):
-            with VerticalScroll(id="askud-scroll"):
+        with Vertical(id="askud-container", classes="modal-card"):
+            yield Label("Ответ агенту", id="askud-title", classes="modal-title")
+            with VerticalScroll(id="askud-scroll", classes="modal-scroll"):
                 yield Static(Markdown(self._question), shrink=False)
-            yield Input(placeholder="Свой ответ (если не подходит Yes/No)", id="askud-custom")
-            with Horizontal(id="askud-buttons"):
-                yield Button("Yes", id="askud-yes", variant="success")
-                yield Button("No", id="askud-no", variant="error")
+            yield Input(placeholder="Свой ответ (если не подходит Да / Нет)", id="askud-custom")
+            with Horizontal(id="askud-buttons", classes="modal-footer"):
+                yield Button("Да", id="askud-yes", variant="success")
+                yield Button("Нет", id="askud-no", variant="error")
                 yield Button("Отправить текст", id="askud-text", variant="default")
 
     def on_mount(self) -> None:
+        apply_accent_to(
+            self,
+            container_id="askud-container",
+            title_id="askud-title",
+            title_text="Ответ агенту",
+        )
         try:
             self.query_one("#askud-yes", Button).focus()
         except Exception:
@@ -779,19 +767,34 @@ class _AskUserDialog(ModalScreen):
 
 
 class _ContextMenuDialog(ModalScreen):
-    DEFAULT_CSS = """
+    DEFAULT_CSS = MODAL_SHARED_CSS + """
     _ContextMenuDialog { align: center middle; }
     #ctx-menu {
-        width: 40; height: auto; max-height: 16;
-        background: #1a1a2e; border: solid #8B5CF6; padding: 0;
+        width: 48;
+        height: auto;
+        max-height: 22;
+        padding: 0;
     }
     #ctx-menu-title {
-        background: #2D2D3D; color: #A78BFA; padding: 0 1; height: 1;
+        background: #1F1B2E;
+        padding: 1 1;
+        height: auto;
         text-style: bold;
     }
-    #ctx-menu ListView { background: #1a1a2e; height: auto; max-height: 12; }
-    #ctx-menu ListItem { padding: 0 1; color: #E5E7EB; height: 1; }
-    #ctx-menu ListItem:hover { background: #8B5CF6 40%; }
+    #ctx-menu ListView {
+        background: #12121A;
+        height: auto;
+        max-height: 16;
+        padding: 1 0;
+    }
+    #ctx-menu ListItem {
+        padding: 0 2;
+        color: #E5E7EB;
+        height: 1;
+        margin: 0 0 0 0;
+    }
+    #ctx-menu ListItem:hover { background: #2A2A3E; }
+    #ctx-menu ListItem.--highlight { background: #3B2F55; }
     """
 
     def __init__(self, title: str, options: list, callback):
@@ -801,11 +804,17 @@ class _ContextMenuDialog(ModalScreen):
         self._callback = callback
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="ctx-menu"):
+        with Vertical(id="ctx-menu", classes="modal-card"):
             yield Static(f"  {self._title}", id="ctx-menu-title")
             yield ListView(id="ctx-menu-list")
 
     def on_mount(self) -> None:
+        apply_accent_to(
+            self,
+            container_id="ctx-menu",
+            title_id="ctx-menu-title",
+            title_text=f"  {self._title}",
+        )
         lv = self.query_one("#ctx-menu-list", ListView)
         for label, _action in self._options:
             lv.append(ListItem(Label(label)))
@@ -825,14 +834,31 @@ class _ContextMenuDialog(ModalScreen):
 
 
 class _ColorPaletteDialog(ModalScreen):
-    DEFAULT_CSS = """
+    DEFAULT_CSS = MODAL_SHARED_CSS + """
     _ColorPaletteDialog { align: center middle; }
     #palette-container {
-        width: 64; height: auto; max-height: 14;
-        background: #1a1a2e; border: solid #8B5CF6; padding: 1 2;
+        width: 70;
+        height: auto;
+        max-height: 18;
     }
-    #palette-grid { height: auto; layout: horizontal; margin: 1 0; }
-    #palette-grid Button { min-width: 6; width: 6; height: 3; margin: 0 1 1 0; }
+    #palette-title { height: auto; }
+    #palette-container Horizontal {
+        height: auto;
+        layout: horizontal;
+        margin: 0 0 1 0;
+    }
+    #palette-container Horizontal Button {
+        min-width: 6;
+        width: 6;
+        height: 3;
+        margin: 0 1 0 0;
+        border: tall #2D2D3D;
+    }
+    #palette-cancel {
+        min-width: 14;
+        height: 3;
+        margin: 1 0 0 0;
+    }
     """
 
     def __init__(self, colors_by_id: Dict[str, str], callback):
@@ -841,8 +867,8 @@ class _ColorPaletteDialog(ModalScreen):
         self._callback = callback
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="palette-container"):
-            yield Label("Выберите цвет акцента")
+        with Vertical(id="palette-container", classes="modal-card"):
+            yield Label("Выберите цвет акцента", id="palette-title", classes="modal-title")
             with Horizontal(id="palette-row-0"):
                 for i in range(0, min(8, len(self._colors))):
                     yield Button("  ", id=f"palette-pick-{i}")
@@ -855,10 +881,12 @@ class _ColorPaletteDialog(ModalScreen):
             yield Button("Отмена", id="palette-cancel")
 
     def on_mount(self) -> None:
-        try:
-            self.query_one("#palette-cancel", Button).styles.margin = (1, 0, 0, 0)
-        except Exception:
-            pass
+        apply_accent_to(
+            self,
+            container_id="palette-container",
+            title_id="palette-title",
+            title_text="Выберите цвет акцента",
+        )
         for i, color in enumerate(self._colors):
             try:
                 btn = self.query_one(f"#palette-pick-{i}", Button)

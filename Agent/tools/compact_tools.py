@@ -59,13 +59,11 @@ def plan_tool(
     status: str = "pending",
     note: str = "",
 ) -> Dict[str, Any]:
-    """План задачи (один тул вместо save/load/update/clear_plan).
+    """План задачи.
 
-    action:
-    - `save` — title, steps_json (JSON-массив строк шагов).
-    - `load` — без доп. полей.
-    - `update` — step_index, status (pending|in_progress|completed|blocked), note (опц.).
-    - `clear` — очистить план (в CLI может запросить подтверждение).
+    action=save: title + steps_json (JSON-массив строк).
+    action=load: без полей. action=update: step_index, status
+    (pending|in_progress|completed|blocked), note (опц.). action=clear: очистить.
     """
     a = (action or "").strip().lower()
     if a == "save":
@@ -92,12 +90,10 @@ def docx_write_tool(
     file_path: str,
     data_json: str,
 ) -> Dict[str, Any]:
-    """Создание/дозапись/патч .docx одним тулом (вместо трёх отдельных).
+    """Создать/дописать/патчить .docx.
 
-    action:
-    - `create` — data_json как paragraphs_json у docx_document_create.
-    - `append` — data_json как paragraphs_json у append_paragraphs.
-    - `patch` — data_json как patches_json у patch_paragraphs.
+    action=create|append: data_json как paragraphs_json;
+    action=patch: data_json как patches_json.
     """
     a = (action or "").strip().lower()
     if a == "create":
@@ -123,14 +119,11 @@ def docxedit_tool(
     column_num: int = 1,
     font_size: int = 12,
 ) -> Dict[str, Any]:
-    """Правки .docx с сохранением формата (docxedit) одним тулом.
+    """Правки .docx с сохранением формата.
 
-    action:
-    - `replace` — old_string, new_string, include_tables.
-    - `replace_limited` — old_string, new_string, paragraph_number, include_tables.
-    - `find_line` — search_text.
-    - `table_cell` — table_index, row_num, column_num, new_string.
-    - `table_font` — table_index, font_size.
+    action=replace|replace_limited: old_string, new_string (replace_limited + paragraph_number).
+    action=find_line: search_text. action=table_cell: table_index, row_num, column_num, new_string.
+    action=table_font: table_index, font_size.
     """
     a = (action or "").strip().lower()
     if a == "replace":
@@ -174,12 +167,11 @@ def ocr_tool(
     max_pdf_pages: int = 30,
     max_side: int = 2400,
 ) -> Dict[str, Any]:
-    """OCR/чтение файла или изображения одним тулом.
+    """OCR / чтение текста.
 
-    action:
-    - `soft` — path к .txt/.md/.py/.pdf (текстовый слой); max_pdf_pages, max_chars.
-    - `medium` — path к изображению (скрин, UI); max_side, max_chars.
-    - `strong` — path к фото; max_side, max_chars.
+    action=soft: .txt/.md/.py/.pdf (текстовый слой). action=medium: скрин/UI.
+    action=strong: фото. Для всех: path, max_chars; для soft — max_pdf_pages;
+    для medium/strong — max_side.
     """
     a = (action or "").strip().lower()
     if a == "soft":
@@ -205,10 +197,7 @@ def code_file_tool(
     code: str = "",
     snippet: str = "",
 ) -> Dict[str, Any]:
-    """Создать файл с кодом или дописать фрагмент.
-
-    action: `create` — filepath, language, code; `append` — filepath, snippet, language (опц.).
-    """
+    """Создать файл (action=create: filepath, language, code) или дописать фрагмент (action=append: filepath, snippet)."""
     a = (action or "").strip().lower()
     if a == "create":
         return create_code_file.invoke({"filepath": filepath, "language": language, "code": code})
@@ -233,13 +222,7 @@ def git_ops(
     limit: int = 15,
     commit: str = "",
 ) -> Dict[str, Any]:
-    """Git одним тулом: status | log | diff | rollback_file.
-
-    - `status` — без полей.
-    - `log` — path (фильтр), limit.
-    - `diff` — commit (пусто = незакоммиченное).
-    - `rollback_file` — path (файл), commit (опц.).
-    """
+    """Git: status | log (path, limit) | diff (commit, пусто=незакоммиченное) | rollback_file (path, commit)."""
     git_log, git_diff, git_rollback_file, git_status = _git_invoke()
     a = (action or "").strip().lower()
     if a == "status":
@@ -272,13 +255,11 @@ def library_context(
     query: str = "",
     max_tokens: int = 4000,
 ) -> Dict[str, Any]:
-    """Документация библиотек (Context7 + fallback) и быстрый поиск — **единый тул** вместо resolve + get_library_docs + get_documentation.
+    """Документация библиотек (Context7 + fallback).
 
-    action:
-    - `resolve` — найти пакет по имени: **library_name** (например react).
-    - `docs` — выборка по Context7: **library_id** (из resolve), **query**, max_tokens.
-    - `search` — быстрый сценарий как бывший **get_documentation**: **query** обязателен; **library_name** опционально
-      (подсказка библиотеки). С API-ключом Context7 — resolve+context; иначе DDG. Для «общего веба» по ссылкам используй **web_fetch**.
+    action=resolve: найти по library_name. action=docs: library_id (из resolve) + query + max_tokens.
+    action=search: query (+ опц. library_name) для быстрого lookup через DDG/Context7.
+    Для общих URL — web_fetch.
     """
     resolve_library, get_library_docs, get_documentation = _c7_invoke()
     a = (action or "").strip().lower()
@@ -319,14 +300,7 @@ def headless_browser(
     result_selector: str = "body",
     js_expression: str = "",
 ) -> Dict[str, Any]:
-    """Headless Chromium (Node) одним тулом.
-
-    action:
-    - `get_text` — url, selector, wait_ms.
-    - `screenshot` — url, output_path, wait_ms.
-    - `click_and_get` — url, click_selector, result_selector (куда читать текст после клика), wait_ms.
-    - `evaluate` — url, js_expression.
-    """
+    """Headless Chromium (Node): get_text (url, selector) | screenshot (url, output_path) | click_and_get (url, click_selector, result_selector) | evaluate (url, js_expression). wait_ms — общий."""
     btext, bshot, bclick, beval = _browser_invoke()
     a = (action or "").strip().lower().replace("-", "_")
     if a == "get_text":
@@ -390,13 +364,11 @@ def playwright_sync(
     output_path: str = "pw_sync.png",
     full_page: bool = False,
 ) -> Dict[str, Any]:
-    """Python Playwright (sync) одним тулом — только если включён в настройках Agent.
+    """Python Playwright (sync), только при включении в Settings режима Agent.
 
-    action:
-    - `page_text` — url, selector, wait_ms.
-    - `click` — url, click_selector (= selector для клика), wait_after_ms.
-    - `fill_submit` — url, field_selector, fill_text, button_selector (опц.).
-    - `screenshot` — url, output_path, full_page.
+    action=page_text: url, selector. action=click: url, click_selector, wait_after_ms.
+    action=fill_submit: url, field_selector, fill_text, button_selector (опц.).
+    action=screenshot: url, output_path, full_page.
     """
     pt, pc, pf, ps = _pw_invoke()
     a = (action or "").strip().lower()
@@ -437,12 +409,10 @@ def reasoning_tool(
     new_content: str = "",
     query: str = "",
 ) -> Dict[str, Any]:
-    """Рассуждения и анализ одним тулом (вместо think / show_diff / analyze_code).
+    """Рассуждения и анализ.
 
-    action:
-    - `think` — **thought** (короткая запись плана/гипотезы).
-    - `diff` — **path**, **old_content**, **new_content** (unified diff, для предпросмотра перед edit).
-    - `analyze` — **path**, **query** (RAG + заголовок файла).
+    action=think: короткая запись в thought. action=diff: path, old_content, new_content
+    (unified diff перед edit). action=analyze: path, query (RAG по файлу).
     """
     think, show_diff, analyze_code = _reasoning_invoke()
     a = (action or "").strip().lower()

@@ -109,7 +109,20 @@ class VersionControlPanel(Vertical):
                         cat = "S"
                         self._staged_files.add(f)
 
-                    color = {"M": "#F59E0B", "?": "#EF4444", "S": "#10B981"}.get(cat, "#6B7280")
+                    # Semantic palette: modified → accent, added/new → green, staged/complete → green, untracked → red.
+                    _accent = "#8B5CF6"
+                    try:
+                        from Interface.ui_prefs import load_prefs
+                        from Interface.themes import get_theme
+                        _prefs = load_prefs()
+                        _accent = str(
+                            _prefs.get("accent_color")
+                            or get_theme(str(_prefs.get("theme", "Purple Dark"))).get("accent")
+                            or _accent,
+                        )
+                    except Exception:
+                        pass
+                    color = {"M": _accent, "?": "#EF4444", "S": "#10B981"}.get(cat, "#6B7280")
                     is_selected = (cat == "S")
                     marker = "✓" if is_selected else "○"
                     cb = Checkbox(
@@ -151,8 +164,20 @@ class VersionControlPanel(Vertical):
                 author = c.get("author", "")
                 date = c.get("date", "")[:10]
 
+                _accent = "#8B5CF6"
+                try:
+                    from Interface.ui_prefs import load_prefs
+                    from Interface.themes import get_theme
+                    _prefs = load_prefs()
+                    _accent = str(
+                        _prefs.get("accent_color")
+                        or get_theme(str(_prefs.get("theme", "Purple Dark"))).get("accent")
+                        or _accent,
+                    )
+                except Exception:
+                    pass
                 label = Text()
-                label.append(f"{short_hash} ", style="bold #F59E0B")
+                label.append(f"{short_hash} ", style=f"bold {_accent}")
                 label.append(f"{msg} ", style="#E5E7EB")
                 label.append(f"({author}, {date})", style="#6B7280")
 

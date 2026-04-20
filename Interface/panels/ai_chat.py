@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from rich.markdown import Markdown
 
@@ -15,17 +15,52 @@ from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, Checkbox, DirectoryTree, Input, Label, RichLog, Select, Static, TextArea,
+    Button, Checkbox, Collapsible, DirectoryTree, Input, Label, RichLog, Select,
+    Static, TextArea,
 )
 
 try:
     from textual.widgets import Markdown as MarkdownWidget
 except ImportError:  # pragma: no cover
     MarkdownWidget = None  # type: ignore[misc, assignment]
+
+try:
+    from Interface.panels.creator_progress import CreatorProgressBlock
+except Exception:  # pragma: no cover
+    CreatorProgressBlock = None  # type: ignore[misc, assignment]
+
+try:
+    from Interface.panels.diff_block import (
+        CodeDiffBlock,
+        diff_stats as _diff_stats,
+        read_before_after_texts as _read_before_after_texts,
+    )
+except Exception:  # pragma: no cover
+    CodeDiffBlock = None  # type: ignore[misc, assignment]
+    def _diff_stats(before: str, after: str) -> tuple[int, int]:  # type: ignore[misc]
+        return 0, 0
+    def _read_before_after_texts(path: str, snapshot_id):  # type: ignore[misc]
+        return "", ""
+
+try:
+    from Interface.panels.deep_checkpoint import DeepCheckpointBlock
+except Exception:  # pragma: no cover
+    DeepCheckpointBlock = None  # type: ignore[misc, assignment]
+
+try:
+    from Interface.panels.tool_card import ToolCardBlock, PRETTY_TOOL_NAMES
+except Exception:  # pragma: no cover
+    ToolCardBlock = None  # type: ignore[misc, assignment]
+    PRETTY_TOOL_NAMES = frozenset()  # type: ignore[assignment]
+
+try:
+    from Interface.panels.download_block import DownloadProgressBlock
+except Exception:  # pragma: no cover
+    DownloadProgressBlock = None  # type: ignore[misc, assignment]
 
 
 class ChatSubmitted(Message):
@@ -65,25 +100,52 @@ class RollbackRequested(Message):
         self.turn_index = int(turn_index)
 
 
+class DeepCheckpointAction(Message):
+    """User clicked Откат / Продолжить on a Deep Solver checkpoint card."""
+
+    def __init__(self, cp_id: str, action: str) -> None:
+        super().__init__()
+        self.cp_id = str(cp_id)
+        self.action = str(action)
+
+
 class ChatFilePickerScreen(ModalScreen[Optional[Path]]):
     """Модальное дерево файлов проекта — выбор файла для контекста или изображения."""
 
-    DEFAULT_CSS = """
+    from Interface.modal_style import MODAL_SHARED_CSS as _SHARED_CSS
+
+    DEFAULT_CSS = _SHARED_CSS + """
     ChatFilePickerScreen { align: center middle; }
     #chatfp {
         width: 88%;
         height: 86%;
-        background: #151520;
-        border: round #8B5CF6;
-        padding: 1;
     }
-    #chatfp-title { height: 1; text-style: bold; margin: 0 0 1 0; }
+    #chatfp-title {
+        height: auto;
+    }
     #chatfp-nav { height: 3; layout: horizontal; margin: 0 0 1 0; }
-    #chatfp-nav Button { min-width: 10; margin: 0 1 0 0; }
-    #chatfp-path { width: 1fr; }
-    #chatfp-tree { height: 1fr; }
+    #chatfp-nav Button {
+        min-width: 12;
+        margin: 0 1 0 0;
+        height: 3;
+    }
+    #chatfp-path {
+        width: 1fr;
+        background: #0D0D0D;
+        color: #E5E7EB;
+        border: solid #2D2D3D;
+    }
+    #chatfp-tree {
+        height: 1fr;
+        background: #12121A;
+        border: solid #2D2D3D;
+    }
     #chatfp-actions { height: 3; layout: horizontal; margin: 1 0 0 0; }
-    #chatfp-actions Button { min-width: 18; margin: 0 1 0 0; }
+    #chatfp-actions Button {
+        min-width: 18;
+        margin: 0 1 0 0;
+        height: 3;
+    }
     """
 
     def __init__(self, start_dir: Path) -> None:
@@ -94,8 +156,12 @@ class ChatFilePickerScreen(ModalScreen[Optional[Path]]):
         self._root = Path("/")
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="chatfp"):
-            yield Label("Выберите файл (изображения — во вложения, остальное — в контекст)", id="chatfp-title")
+        with Vertical(id="chatfp", classes="modal-card"):
+            yield Label(
+                "Выберите файл (изображения — во вложения, остальное — в контекст)",
+                id="chatfp-title",
+                classes="modal-title",
+            )
             with Horizontal(id="chatfp-nav"):
                 yield Button("Корень", id="chatfp-root")
                 yield Button("Домой", id="chatfp-home")
@@ -104,10 +170,17 @@ class ChatFilePickerScreen(ModalScreen[Optional[Path]]):
                 yield Input(str(self._start_dir), id="chatfp-path")
             yield DirectoryTree(str(self._root), id="chatfp-tree")
             with Horizontal(id="chatfp-actions"):
-                yield Button("Выбрать файл", id="chatfp-open")
+                yield Button("Выбрать файл", id="chatfp-open", variant="primary")
                 yield Button("Отмена", id="chatfp-cancel")
 
     def on_mount(self) -> None:
+        from Interface.modal_style import apply_accent_to
+        apply_accent_to(
+            self,
+            container_id="chatfp",
+            title_id="chatfp-title",
+            title_text="Выберите файл (изображения — во вложения, остальное — в контекст)",
+        )
         self._go_to(self._start_dir)
 
     def _go_to(self, target: Path) -> None:
@@ -192,7 +265,7 @@ DIM = "#4B5563"
 BLUE = "#3B82F6"
 CYAN = "#06B6D4"
 
-MODES = ["Normal", "Creator", "Agent", "Research"]
+MODES = ["Normal", "Creator", "Agent", "Research", "Deep"]
 MARKDOWN_SYNTAX_THEME_MAP = {
     "monokai": "monokai",
     "dracula": "dracula",
@@ -364,6 +437,13 @@ class UserMessageBlock(Vertical):
     }
     UserMessageBlock .user-rollback-row Button {
         min-width: 28;
+        background: #1F2430;
+        color: #9CA3AF;
+        border: tall #2D2D3D;
+    }
+    UserMessageBlock .user-rollback-row Button:hover {
+        background: #272D3A;
+        color: #D1D5DB;
     }
     """
 
@@ -371,17 +451,45 @@ class UserMessageBlock(Vertical):
         super().__init__(**kwargs)
         self._text = text
         self._turn_index = int(turn_index)
+        self._name_static: Optional[Static] = None
+
+    def _accent(self) -> str:
+        try:
+            from Interface.ui_prefs import load_prefs
+            from Interface.themes import get_theme
+            prefs = load_prefs()
+            theme = get_theme(str(prefs.get("theme", "Purple Dark")))
+            return str(prefs.get("accent_color") or theme.get("accent") or PURPLE)
+        except Exception:
+            return PURPLE
 
     def compose(self) -> ComposeResult:
-        yield Static(Text("Вы", style=f"bold {PURPLE_LIGHT}"))
+        accent = self._accent()
+        self._name_static = Static(Text("Вы", style=f"bold {accent}"))
+        yield self._name_static
         yield Static(Text(self._text, style="#E5E7EB"))
         if self._turn_index >= 0:
             with Horizontal(classes="user-rollback-row"):
                 yield Button(
                     "Откат к состоянию до этого запроса",
                     id=f"rollback-btn-{self._turn_index}",
-                    variant="warning",
+                    variant="default",
                 )
+
+    def on_mount(self) -> None:
+        self.refresh_accent()
+
+    def refresh_accent(self) -> None:
+        accent = self._accent()
+        try:
+            self.styles.border_left = ("outer", accent)
+        except Exception:
+            pass
+        if self._name_static is not None:
+            try:
+                self._name_static.update(Text("Вы", style=f"bold {accent}"))
+            except Exception:
+                pass
 
     @on(Button.Pressed)
     def _on_rollback_press(self, event: Button.Pressed) -> None:
@@ -453,6 +561,21 @@ class AIChatPanel(Vertical):
     .attach-chip:hover {
         background: #8B5CF6;
     }
+    #deep-status-bar {
+        height: 0;
+        min-height: 0;
+        display: none;
+        padding: 0 1;
+        margin: 0 0 1 0;
+        background: #12121A;
+        border-left: thick #8B5CF6;
+        color: #E5E7EB;
+    }
+    #deep-status-bar.-active {
+        height: auto;
+        min-height: 1;
+        display: block;
+    }
     #ctx-meter-row {
         height: auto;
         min-height: 2;
@@ -483,11 +606,14 @@ class AIChatPanel(Vertical):
         background: #0D0D0D;
         padding: 0 1 1 1;
     }
-    .chat-input-hint {
+    #creator-progress-slot {
         height: auto;
-        min-height: 1;
-        color: #6B7280;
-        margin: 0 0 0 0;
+        width: 100%;
+        padding: 0;
+        margin: 0 0 1 0;
+    }
+    #creator-progress-slot.hidden {
+        display: none;
     }
     #chat-input {
         border: solid #2D2D3D;
@@ -525,39 +651,195 @@ class AIChatPanel(Vertical):
         display: block;
     }
     #custom-models-line {
-        height: auto;
-        min-height: 1;
-        color: #6B7280;
-        margin: 0 0 1 0;
+        display: none;
     }
+    /* ── Unified settings spacing ──────────────────────────────────
+       Every field in every settings tab goes through ``.settings-row`` and
+       every button row goes through ``.settings-button-row``. By keeping
+       the vertical gap (``margin-bottom: 1``) and padding identical across
+       them, the tabs line up visually instead of looking like three
+       different screens glued together. Do NOT override these margins in
+       per-section CSS — rely on the spacing defined here. */
     .settings-row {
         height: auto;
-        layout: horizontal;
+        layout: grid;
+        grid-size: 2 1;
+        grid-columns: 1fr 2fr;
+        grid-gutter: 0 3;
         margin: 0 0 1 0;
+        padding: 0 1;
     }
     .settings-row-label {
-        width: 26;
-        max-width: 28;
         content-align: left middle;
+        color: #E5E7EB;
+        padding: 1 1;
+        min-width: 18;
     }
     .settings-row Input, .settings-row Select {
-        width: 1fr;
+        width: 100%;
         min-width: 14;
+        height: 3;
+    }
+    .settings-row Checkbox {
+        width: 100%;
+        height: 3;
     }
     #sor-balance-display {
         height: auto;
         min-height: 3;
         color: #9CA3AF;
+        padding: 1 2;
+        background: #0D0D12;
+        border: tall #2D2D3D;
     }
     .settings-section-title {
-        color: #A78BFA;
         text-style: bold;
+        margin: 1 0 1 0;
+        padding: 0 1;
+    }
+    .settings-card {
+        height: auto;
+        padding: 1 2;
+        margin: 0 0 1 0;
+        background: #12121A;
+        border: round #2D2D3D;
+    }
+    .settings-card-title {
+        text-style: bold;
+        margin: 0 0 1 0;
+        padding: 0 0 1 0;
+    }
+    .settings-card-subtitle {
+        color: #6B7280;
+        margin: 0 0 1 0;
+        padding: 0 1;
+        text-style: italic;
+    }
+    .settings-hint {
+        color: #6B7280;
+        margin: 0 0 1 0;
+        padding: 0 1;
+    }
+    .settings-button-row {
+        height: auto;
+        layout: horizontal;
         margin: 1 0 0 0;
+        padding: 0 1;
+    }
+    .settings-button-row Button {
+        margin: 0 2 0 0;
+        min-width: 24;
+        height: 3;
+        border: round #2D2D3D;
+        padding: 0 2;
+        text-style: bold;
+    }
+    .settings-action-btn {
+        background: #1C1C26;
+        color: #E5E7EB;
+        border: round #2D2D3D;
+    }
+    .settings-action-btn:hover {
+        background: #26263A;
+    }
+    .settings-action-btn--primary {
+        background: #2A1F4D;
+        color: #F3F4F6;
+    }
+    .settings-action-btn--primary:hover {
+        background: #3B2F6B;
+    }
+    .settings-action-btn--success {
+        background: #10321F;
+        color: #A7F3D0;
+    }
+    .settings-action-btn--success:hover {
+        background: #164C2E;
+    }
+    .settings-action-btn--error {
+        background: #3A1313;
+        color: #FCA5A5;
+    }
+    .settings-action-btn--error:hover {
+        background: #561E1E;
+    }
+    .param-grid {
+        height: auto;
+        layout: grid;
+        grid-size: 2 4;
+        grid-rows: 7 7 7 7;
+        grid-gutter: 2 3;
+        margin: 1 0 1 0;
+        padding: 0 1;
+    }
+    .param-cell {
+        height: 7;
+        layout: vertical;
+        padding: 1 2;
+        background: #0D0D12;
+        border: tall #2D2D3D;
+    }
+    .param-cell-label {
+        text-style: bold;
+        height: 1;
+    }
+    .param-cell-hint {
+        color: #6B7280;
+        height: 1;
+        text-style: italic;
+    }
+    .param-cell Input {
+        width: 100%;
+        height: 3;
+        margin: 1 0;
+    }
+    .param-cell-wide {
+        column-span: 2;
+    }
+    #sol-status {
+        color: #9CA3AF;
+        margin: 1 0 0 0;
+    }
+    #sol-model-list {
+        color: #9CA3AF;
+        margin: 1 0 0 0;
+        padding: 1 2;
+        background: #0D0D0D;
+        border: solid #2D2D3D;
     }
     .stream-line {
         height: auto;
         margin: 0 0 0 0;
         color: #9CA3AF;
+    }
+    .file-changes-table {
+        height: auto;
+        padding: 1 2;
+        margin: 0 0 1 0;
+        background: #12121A;
+        border: round #2D2D3D;
+    }
+    .sources-widget {
+        height: auto;
+        padding: 1 2;
+        margin: 0 0 1 0;
+        background: #12121A;
+        border: round #2D2D3D;
+    }
+    Collapsible.round-card {
+        height: auto;
+        margin: 0 0 1 0;
+        background: #12121A;
+        border: round #2D2D3D;
+        padding: 0 0 0 0;
+    }
+    Collapsible.round-card > CollapsibleTitle {
+        padding: 0 1 0 1;
+        height: auto;
+        color: #E5E7EB;
+    }
+    Collapsible.round-card > Contents {
+        padding: 1 1 1 1;
     }
     """
 
@@ -577,11 +859,14 @@ class AIChatPanel(Vertical):
         self._pending_images: List[Path] = []
         self._msg_seq = 0
         self._round_file_deltas: Dict[str, int] = {}
+        self._round_file_changes: Dict[str, Dict[str, int]] = {}
+        self._round_file_order: List[str] = []
         self._round_web_sources: List[Dict[str, str]] = []
         self._round_web_seen: set[str] = set()
         self._chip_epoch = 0
         self._lifetime_prompt = 0
         self._lifetime_completion = 0
+        self._creator_progress: Optional[Any] = None
 
     def compose(self) -> ComposeResult:
         yield Static("Чат проекта", id="chat-thread-label")
@@ -665,6 +950,10 @@ class AIChatPanel(Vertical):
 
         mode_options = [(m, m.lower()) for m in MODES]
 
+        area.mount(Vertical(id="creator-progress-slot"))
+        # Deep Solver status badge — shows elapsed time / checkpoint count
+        # while a Deep run is live. Hidden by default via CSS.
+        area.mount(Static("", id="deep-status-bar"))
         area.mount(TextArea(
             "",
             id="chat-input",
@@ -685,20 +974,25 @@ class AIChatPanel(Vertical):
             Button("Стоп", id="stop-btn"),
             id="chat-controls",
         ))
-        area.mount(Static("", id="custom-models-line"))
-        area.mount(Label(
-            "Ctrl+Enter — отправить  ·  Enter — новая строка  ·  до 12 строк с прокруткой",
-            id="chat-input-hint",
-            classes="chat-input-hint",
-        ))
 
-    @staticmethod
-    def _settings_row(content: VerticalScroll, label: str, widget) -> None:
+    def _accent(self) -> str:
+        try:
+            return self._ui_colors()["accent"]
+        except Exception:
+            return PURPLE
+
+    def _settings_row(self, content, label: str, widget) -> None:  # type: ignore[override]
         content.mount(Horizontal(
-            Label(label, classes="settings-row-label"),
+            Label(Text(label, style=f"bold {self._accent()}"), classes="settings-row-label"),
             widget,
             classes="settings-row",
         ))
+
+    def _settings_title(self, text: str) -> Label:
+        return Label(Text(text, style=f"bold {self._accent()}"), classes="settings-card-title")
+
+    def _section_title(self, text: str) -> Label:
+        return Label(Text(text, style=f"bold {self._accent()}"), classes="settings-section-title")
 
     def render_settings_into(self, scroll: VerticalScroll, section: str) -> None:
         """Fill a workspace settings tab (widgets may live outside this panel)."""
@@ -735,7 +1029,7 @@ class AIChatPanel(Vertical):
         density = str(prefs.get("density", "normal"))
         syntax = str(prefs.get("syntax_theme", "monokai"))
         accent = str(prefs.get("accent_color", "#8B5CF6"))
-        content.mount(Label("Внешний вид интерфейса", classes="settings-section-title"))
+        content.mount(self._section_title("Внешний вид интерфейса"))
         self._settings_row(
             content, "Тема",
             Select(theme_options, value=theme, id="sp-theme", allow_blank=False),
@@ -758,8 +1052,12 @@ class AIChatPanel(Vertical):
             Input(value=accent, id="sp-accent", placeholder="#8B5CF6"),
         )
         content.mount(Horizontal(
-            Button("Применить цвет", id="sp-apply-accent", variant="primary"),
-            Button("Палитра", id="sp-open-palette", variant="default"),
+            Button("🎨 Применить цвет", id="sp-apply-accent",
+                   classes="settings-action-btn settings-action-btn--primary",
+                   variant="primary"),
+            Button("🎲 Открыть палитру", id="sp-open-palette",
+                   classes="settings-action-btn", variant="default"),
+            classes="settings-button-row",
         ))
 
     def _render_agents_settings(self, content: VerticalScroll) -> None:
@@ -769,9 +1067,18 @@ class AIChatPanel(Vertical):
         prof = os.getenv("TCA_PROFILE", "balanced").lower()
         if prof not in ("fast", "balanced", "quality"):
             prof = "balanced"
-        content.mount(Label("Профиль агента и специальные тулы", classes="settings-section-title"))
+
+        # ── Card 1: profile + tool toggles ──────────────────────────────
+        tools_card = Vertical(classes="settings-card", id="sa-tools-card")
+        content.mount(tools_card)
+        tools_card.mount(self._settings_title("Профиль агента и тулы"))
+        tools_card.mount(Label(
+            "Эти настройки применяются во всех режимах (Normal / Agent / Creator / Research) "
+            "и ко всем моделям — локальным и удалённым.",
+            classes="settings-card-subtitle",
+        ))
         self._settings_row(
-            content, "Профиль TCA",
+            tools_card, "Профиль TCA",
             Select(
                 [("Fast", "fast"), ("Balanced", "balanced"), ("Quality", "quality")],
                 value=prof,
@@ -780,7 +1087,7 @@ class AIChatPanel(Vertical):
             ),
         )
         self._settings_row(
-            content, "Browser tools",
+            tools_card, "Browser tools",
             Checkbox(
                 "Включить (headless) в Agent mode",
                 value=bool(prefs.get("browser_tools_enabled", True)),
@@ -788,18 +1095,87 @@ class AIChatPanel(Vertical):
             ),
         )
         self._settings_row(
-            content, "Playwright Py",
+            tools_card, "Playwright Py",
             Checkbox(
                 "Включить Python Playwright в Agent mode",
                 value=bool(prefs.get("playwright_python_enabled", False)),
                 id="sa-playwright",
             ),
         )
-        content.mount(
-            Static(
-                "Изменения применяются для следующих запусков/сообщений в Agent mode.",
-            )
+        self._settings_row(
+            tools_card, "Кастом-тулы",
+            Checkbox(
+                "Подключать RAG / planning / interpreter / thinking",
+                value=bool(prefs.get("custom_tools_enabled", True)),
+                id="sa-custom-tools",
+            ),
         )
+
+        # ── Card 2: Creator orchestration ──────────────────────────────
+        orch_card = Vertical(classes="settings-card", id="sa-orch-card")
+        content.mount(orch_card)
+        orch_card.mount(self._settings_title("Creator — оркестрация"))
+        orch_card.mount(Label(
+            "Parallel — воркеры запускаются одновременно. Pipeline — последовательно, "
+            "передавая результат дальше. Auto — оркестратор сам выбирает режим под задачу.",
+            classes="settings-card-subtitle",
+        ))
+        orch_mode = str(prefs.get("orchestration_mode", "auto")).lower()
+        if orch_mode not in ("parallel", "pipeline", "auto"):
+            orch_mode = "auto"
+        self._settings_row(
+            orch_card, "Режим",
+            Select(
+                [("Auto", "auto"), ("Parallel", "parallel"), ("Pipeline", "pipeline")],
+                value=orch_mode, id="sa-orch-mode", allow_blank=False,
+            ),
+        )
+        self._settings_row(
+            orch_card, "Макс. воркеров",
+            Input(
+                value=str(int(prefs.get("orchestration_max_workers", 4) or 4)),
+                id="sa-orch-max-workers", placeholder="4",
+            ),
+        )
+
+        # ── Card 3: Research mode ──────────────────────────────────────
+        res_card = Vertical(classes="settings-card", id="sa-research-card")
+        content.mount(res_card)
+        res_card.mount(self._settings_title("Research mode"))
+        res_card.mount(Label(
+            "Параметры веб-ресёрча: сколько источников собирать, сколько раундов углубления, "
+            "и нужно ли тянуть полные страницы (web_fetch) вслед за web_search.",
+            classes="settings-card-subtitle",
+        ))
+        self._settings_row(
+            res_card, "Макс. источников",
+            Input(
+                value=str(int(prefs.get("research_max_sources", 6) or 6)),
+                id="sa-research-max-sources", placeholder="6",
+            ),
+        )
+        self._settings_row(
+            res_card, "Раундов углубления",
+            Input(
+                value=str(int(prefs.get("research_max_rounds", 3) or 3)),
+                id="sa-research-max-rounds", placeholder="3",
+            ),
+        )
+        self._settings_row(
+            res_card, "Deep fetch",
+            Checkbox(
+                "Подгружать полные страницы (web_fetch) для топ-результатов",
+                value=bool(prefs.get("research_deep_fetch", True)),
+                id="sa-research-deep-fetch",
+            ),
+        )
+        res_card.mount(Horizontal(
+            Button("✓ Применить изменения", id="sa-apply",
+                   classes="settings-action-btn settings-action-btn--primary",
+                   variant="primary"),
+            classes="settings-button-row",
+        ))
+        res_card.mount(Static("", id="sa-status"))
 
     def _render_openrouter_settings(self, content: VerticalScroll) -> None:
         from Interface.ui_prefs import load_prefs
@@ -807,21 +1183,35 @@ class AIChatPanel(Vertical):
         prefs = load_prefs()
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
         masked = api_key if len(api_key) <= 8 else api_key[:8] + "…"
-        content.mount(Label("OpenRouter", classes="settings-section-title"))
+        content.mount(self._section_title("OpenRouter"))
         self._settings_row(
             content, "API key",
             Input(value=masked, password=True, id="sor-api-key", placeholder="sk-or-..."),
         )
-        content.mount(Button("Сохранить API key", id="sor-save-key", variant="primary"))
-        content.mount(Label("Счёт OpenRouter", classes="settings-section-title"))
+        content.mount(Horizontal(
+            Button("💾 Сохранить API key", id="sor-save-key",
+                   classes="settings-action-btn settings-action-btn--primary",
+                   variant="primary"),
+            classes="settings-button-row",
+        ))
+        content.mount(self._section_title("Счёт OpenRouter"))
+        try:
+            from Interface.panels.usage_calendar import UsageCalendar
+            content.mount(UsageCalendar(id="sor-usage-calendar"))
+        except Exception:
+            pass
         self._settings_row(
-            content, "Баланс",
+            content, "Статус",
             Static(
-                "Введите ключ выше или сохраните его, затем нажмите «Проверить баланс».",
+                "Нажмите «Проверить баланс», чтобы обновить данные календаря.",
                 id="sor-balance-display",
             ),
         )
-        content.mount(Button("Проверить баланс", id="sor-check-balance", variant="default"))
+        content.mount(Horizontal(
+            Button("🔍 Проверить баланс", id="sor-check-balance",
+                   classes="settings-action-btn", variant="default"),
+            classes="settings-button-row",
+        ))
         self._settings_row(
             content, "Model ID",
             Input(id="sor-model-id", placeholder="provider/model-id"),
@@ -830,13 +1220,31 @@ class AIChatPanel(Vertical):
             content, "Название",
             Input(id="sor-model-name", placeholder="Например GPT-5 Mini"),
         )
-        content.mount(Button("Добавить модель OpenRouter", id="sor-add-model", variant="success"))
+        content.mount(Horizontal(
+            Button("+ Добавить модель OpenRouter", id="sor-add-model",
+                   classes="settings-action-btn settings-action-btn--success",
+                   variant="success"),
+            classes="settings-button-row",
+        ))
         content.mount(Static("", id="sor-status"))
         lines = []
         for m in (prefs.get("openrouter_custom_models") or []):
             if isinstance(m, dict):
                 lines.append(f"- {m.get('name') or m.get('id')} [{m.get('id')}]")
         content.mount(Static("Добавленные модели:\n" + ("\n".join(lines) if lines else "—"), id="sor-model-list"))
+
+    def _param_cell(
+        self,
+        label: str, hint: str, widget_id: str, value: str, placeholder: str,
+        wide: bool = False,
+    ) -> Vertical:
+        classes = "param-cell param-cell-wide" if wide else "param-cell"
+        return Vertical(
+            Label(Text(label, style=f"bold {self._accent()}"), classes="param-cell-label"),
+            Input(value=str(value), id=widget_id, placeholder=placeholder),
+            Label(hint, classes="param-cell-hint"),
+            classes=classes,
+        )
 
     def _render_ollama_settings(self, content: VerticalScroll) -> None:
         from Interface.ui_prefs import load_prefs
@@ -853,31 +1261,57 @@ class AIChatPanel(Vertical):
                     "top_k": 40,
                     "repeat_penalty": 1.1,
                     "num_ctx": 32768,
-                    "num_predict": 2048,
+                    "num_predict": 8192,
                     "stop": "",
                 }
             }
         preset_name = "default" if "default" in presets else next(iter(presets.keys()))
         pv = presets.get(preset_name) if isinstance(presets.get(preset_name), dict) else {}
-        content.mount(Label("Ollama", classes="settings-section-title"))
-        self._settings_row(
-            content, "Base URL",
-            Input(value=base_url, id="sol-base-url", placeholder="http://localhost:11434/v1"),
-        )
-        self._settings_row(
-            content, "API key",
-            Input(value=api_key, id="sol-api-key", password=True, placeholder="optional"),
-        )
-        content.mount(Horizontal(
-            Button("Сохранить подключение", id="sol-save-conn", variant="primary"),
-            Button("Обновить список моделей", id="sol-refresh", variant="default"),
+
+        # ── Card 1: connection ──────────────────────────────────────────
+        conn_card = Vertical(classes="settings-card", id="sol-conn-card")
+        content.mount(conn_card)
+        conn_card.mount(self._settings_title("Подключение к Ollama"))
+        conn_card.mount(Label(
+            "Локальный или удалённый Ollama-сервер. Нативный клиент использует /api, "
+            "fallback — OpenAI-совместимый /v1.",
+            classes="settings-card-subtitle",
         ))
         self._settings_row(
-            content, "Модель",
-            Select([("— сначала нажмите «Обновить» —", "")], id="sol-model-select", allow_blank=False),
+            conn_card, "Base URL",
+            Input(value=base_url, id="sol-base-url", placeholder="http://localhost:11434"),
         )
         self._settings_row(
-            content, "Пресет",
+            conn_card, "API key",
+            Input(value=api_key, id="sol-api-key", password=True, placeholder="опционально"),
+        )
+        conn_card.mount(Horizontal(
+            Button("💾 Сохранить подключение", id="sol-save-conn",
+                   classes="settings-action-btn settings-action-btn--primary",
+                   variant="primary"),
+            Button("🔄 Обновить список моделей", id="sol-refresh",
+                   classes="settings-action-btn", variant="default"),
+            classes="settings-button-row",
+        ))
+
+        # ── Card 2: model + preset selection ────────────────────────────
+        model_card = Vertical(classes="settings-card", id="sol-model-card")
+        content.mount(model_card)
+        model_card.mount(self._settings_title("Модель и пресет"))
+        model_card.mount(Label(
+            "Выберите модель из списка и пресет параметров. "
+            "Пресет можно сохранить, а настройки — привязать к конкретной модели.",
+            classes="settings-card-subtitle",
+        ))
+        self._settings_row(
+            model_card, "Модель",
+            Select(
+                [("— сначала нажмите «Обновить» —", "")],
+                id="sol-model-select", allow_blank=False,
+            ),
+        )
+        self._settings_row(
+            model_card, "Пресет",
             Select(
                 [(str(k), str(k)) for k in presets.keys()],
                 value=str(preset_name),
@@ -885,46 +1319,83 @@ class AIChatPanel(Vertical):
                 allow_blank=False,
             ),
         )
-        content.mount(Label("Параметры генерации", classes="settings-section-title"))
-        self._settings_row(
-            content, "temperature",
-            Input(value=str(pv.get("temperature", 0.2)), id="sol-param-temperature", placeholder="0.2"),
-        )
-        self._settings_row(
-            content, "top_p",
-            Input(value=str(pv.get("top_p", 0.9)), id="sol-param-top-p", placeholder="0.9"),
-        )
-        self._settings_row(
-            content, "top_k",
-            Input(value=str(pv.get("top_k", 40)), id="sol-param-top-k", placeholder="40"),
-        )
-        self._settings_row(
-            content, "repeat_penalty",
-            Input(value=str(pv.get("repeat_penalty", 1.1)), id="sol-param-repeat-penalty", placeholder="1.1"),
-        )
-        self._settings_row(
-            content, "num_ctx",
-            Input(value=str(pv.get("num_ctx", 32768)), id="sol-param-num-ctx", placeholder="32768"),
-        )
-        self._settings_row(
-            content, "num_predict",
-            Input(value=str(pv.get("num_predict", 2048)), id="sol-param-num-predict", placeholder="2048"),
-        )
-        self._settings_row(
-            content, "stop",
-            Input(value=str(pv.get("stop", "")), id="sol-param-stop", placeholder="через |"),
-        )
-        content.mount(Horizontal(
-            Button("Сохранить как пресет", id="sol-save-preset", variant="default"),
-            Button("Применить настройки к модели", id="sol-apply-model-settings", variant="primary"),
+
+        # ── Card 3: generation parameters ───────────────────────────────
+        # Uniform "label left / input right" layout — same pattern as every
+        # other settings card so the Ollama params line up with connection,
+        # agent, personalization, etc.
+        params_card = Vertical(classes="settings-card", id="sol-params-card")
+        content.mount(params_card)
+        params_card.mount(self._settings_title("Параметры генерации"))
+        params_card.mount(Label(
+            "Передаются Ollama напрямую. ``num_ctx``, ``top_k`` и ``repeat_penalty`` "
+            "работают только через нативный клиент (fallback OpenAI-API их игнорирует).",
+            classes="settings-card-subtitle",
         ))
-        content.mount(Button("Добавить выбранную Ollama модель", id="sol-add", variant="success"))
-        content.mount(Static("", id="sol-status"))
-        lines = []
+        self._settings_row(
+            params_card, "temperature",
+            Input(value=str(pv.get("temperature", 0.2)),
+                  id="sol-param-temperature", placeholder="0.2 · креативность"),
+        )
+        self._settings_row(
+            params_card, "top_p",
+            Input(value=str(pv.get("top_p", 0.9)),
+                  id="sol-param-top-p", placeholder="0.9 · nucleus sampling"),
+        )
+        self._settings_row(
+            params_card, "top_k",
+            Input(value=str(pv.get("top_k", 40)),
+                  id="sol-param-top-k", placeholder="40 · кандидаты"),
+        )
+        self._settings_row(
+            params_card, "repeat_penalty",
+            Input(value=str(pv.get("repeat_penalty", 1.1)),
+                  id="sol-param-repeat-penalty", placeholder="1.1 · штраф за повторы"),
+        )
+        self._settings_row(
+            params_card, "num_ctx",
+            Input(value=str(pv.get("num_ctx", 32768)),
+                  id="sol-param-num-ctx", placeholder="32768 · размер контекста"),
+        )
+        self._settings_row(
+            params_card, "num_predict",
+            Input(value=str(pv.get("num_predict", 8192)),
+                  id="sol-param-num-predict", placeholder="8192 · макс. токенов ответа"),
+        )
+        self._settings_row(
+            params_card, "stop",
+            Input(value=str(pv.get("stop", "")),
+                  id="sol-param-stop", placeholder="<|im_end|>, END"),
+        )
+        params_card.mount(Horizontal(
+            Button("💾 Сохранить пресет", id="sol-save-preset",
+                   classes="settings-action-btn", variant="default"),
+            Button("✓ Применить к модели", id="sol-apply-model-settings",
+                   classes="settings-action-btn settings-action-btn--primary",
+                   variant="primary"),
+            Button("+ Добавить модель", id="sol-add",
+                   classes="settings-action-btn settings-action-btn--success",
+                   variant="success"),
+            classes="settings-button-row",
+        ))
+        params_card.mount(Static("", id="sol-status"))
+
+        # ── Card 4: added models list ──────────────────────────────────
+        list_card = Vertical(classes="settings-card", id="sol-list-card")
+        content.mount(list_card)
+        list_card.mount(self._settings_title("Добавленные Ollama модели"))
+        lines: List[str] = []
         for m in (prefs.get("ollama_custom_models") or []):
             if isinstance(m, dict):
-                lines.append(f"- {m.get('label') or m.get('name')}")
-        content.mount(Static("Добавленные Ollama модели:\n" + ("\n".join(lines) if lines else "—"), id="sol-model-list"))
+                label = m.get("label") or m.get("name") or "—"
+                name = m.get("name") or ""
+                ctx = m.get("ctx")
+                suffix = f"  ·  ctx {ctx}" if ctx else ""
+                lines.append(f"  • {label}  [{name}]{suffix}")
+        list_card.mount(Static(
+            "\n".join(lines) if lines else "  Пока нет добавленных моделей.",
+            id="sol-model-list",
+        ))
 
     def _update_env_file(self, key: str, value: str) -> None:
         p = Path.cwd() / ".env"
@@ -972,14 +1443,9 @@ class AIChatPanel(Vertical):
                 )
 
     def _update_custom_models_line(self) -> None:
-        try:
-            from Interface.ui_prefs import load_prefs
-            prefs = load_prefs()
-            total = len(prefs.get("openrouter_custom_models") or []) + len(prefs.get("ollama_custom_models") or [])
-            txt = f"Дополнительные модели: {total}" if total else ""
-            self.query_one("#custom-models-line", Static).update(txt)
-        except Exception:
-            pass
+        # UI line for "additional models" was removed by user request; keep as no-op
+        # so existing call sites continue to work harmlessly.
+        return
 
     def _refresh_openrouter_list_view(self) -> None:
         try:
@@ -1055,7 +1521,6 @@ class AIChatPanel(Vertical):
         label = self.query_one("#chat-thread-label", Static)
         try:
             ta = self.query_one("#chat-input", TextArea)
-            hint = self.query_one("#chat-input-hint", Label)
             for bid in (
                 "#model-select",
                 "#mode-select",
@@ -1070,14 +1535,7 @@ class AIChatPanel(Vertical):
                 self.query_one("#ctx-meter-row", Horizontal).disabled = bool(wid)
             except Exception:
                 pass
-            if wid:
-                ta.disabled = True
-                hint.update("Переключитесь на «Общий чат» слева внизу, чтобы писать сообщения.")
-            else:
-                ta.disabled = False
-                hint.update(
-                    "Ctrl+Enter — отправить  ·  Enter — новая строка  ·  до 12 строк с прокруткой",
-                )
+            ta.disabled = bool(wid)
         except Exception:
             pass
 
@@ -1088,7 +1546,7 @@ class AIChatPanel(Vertical):
         else:
             stream.display = False
             wlog.display = True
-            label.update(Text(f"Воркер: {wid}", style=f"bold {YELLOW}"))
+            label.update(Text(f"Воркер: {wid}", style=f"bold {self._ui_colors()['accent']}"))
             wlog.clear()
             wlog.write(Markdown(
                 f"> Лог воркера **`{wid}`**. Чтобы писать в общий чат, выберите узел **«Общий чат»** слева внизу.\n",
@@ -1098,6 +1556,82 @@ class AIChatPanel(Vertical):
 
     def reset_round_file_metrics(self) -> None:
         self._round_file_deltas.clear()
+        self._round_file_changes.clear()
+        self._round_file_order.clear()
+
+    def _mount_file_changes_table(self) -> None:
+        """Render a compact table of files changed during the current turn."""
+        if not self._round_file_changes:
+            return
+        try:
+            from Interface.ui_prefs import load_prefs
+            from Interface.themes import get_theme
+            prefs = load_prefs()
+            theme = get_theme(str(prefs.get("theme", "Purple Dark")))
+            accent = str(prefs.get("accent_color") or theme.get("accent") or PURPLE)
+        except Exception:
+            accent = PURPLE
+
+        # Column widths for the compact table.
+        name_w = 42
+        added_w = 8
+        removed_w = 8
+
+        paths = list(self._round_file_order) or list(self._round_file_changes.keys())
+        rows: List[Tuple[str, int, int]] = []
+        for p in paths[:20]:
+            stats = self._round_file_changes.get(p) or {}
+            rows.append((p, int(stats.get("added", 0)), int(stats.get("removed", 0))))
+        extra = len(paths) - len(rows)
+
+        body = Text()
+        header = Text()
+        header.append(" ", style="")
+        header.append("Изменённые файлы", style=f"bold {accent}")
+        header.append("   ", style="")
+        header.append(f"({len(self._round_file_changes)} шт.)", style=f"{GRAY}")
+        body.append_text(header)
+        body.append("\n", style="")
+
+        col_head = Text()
+        col_head.append("ФАЙЛ".ljust(name_w), style=f"bold {GRAY}")
+        col_head.append("  ", style="")
+        col_head.append("+ДОБ.".rjust(added_w), style=f"bold {GREEN}")
+        col_head.append("  ", style="")
+        col_head.append("-УДАЛ.".rjust(removed_w), style=f"bold {RED}")
+        body.append_text(col_head)
+        body.append("\n", style="")
+        body.append("─" * (name_w + added_w + removed_w + 4), style=GRAY)
+        body.append("\n", style="")
+
+        for p, added, removed in rows:
+            name = Path(p).name or p
+            if len(name) > name_w:
+                name = name[: name_w - 1] + "…"
+            body.append(name.ljust(name_w), style="#E5E7EB")
+            body.append("  ", style="")
+            body.append((f"+{added}").rjust(added_w), style=GREEN if added else GRAY)
+            body.append("  ", style="")
+            body.append((f"-{removed}").rjust(removed_w), style=RED if removed else GRAY)
+            body.append("\n", style="")
+
+        if extra > 0:
+            body.append(f"… ещё {extra} файлов".center(name_w + added_w + removed_w + 4), style=GRAY)
+            body.append("\n", style="")
+
+        # Strip trailing newline for a tight card.
+        if body.plain.endswith("\n"):
+            body = body[:-1]
+
+        count = len(self._round_file_changes)
+        title = f"📂 Изменённые файлы  ·  {count} шт."
+        card = Collapsible(
+            Static(body),
+            title=title,
+            collapsed=True,
+            classes="round-card",
+        )
+        self._mount_main(card)
 
     def reset_round_web_sources(self) -> None:
         self._round_web_sources.clear()
@@ -1121,20 +1655,64 @@ class AIChatPanel(Vertical):
             })
 
     def _append_web_sources_to_reply(self, text: str) -> str:
+        """Legacy no-op: sources are rendered in their own widget now (see
+        :meth:`_mount_sources_widget`). Kept to avoid breaking callers that
+        still pipe assistant text through this hook."""
+        return text or ""
+
+    def _mount_sources_widget(self) -> None:
+        """Render the collected web sources as a dedicated card below the
+        final assistant reply. Works identically in every chat mode
+        (Normal / Agent / Creator / Research)."""
         if not self._round_web_sources:
-            return text or ""
-        lines = ["\n\n---\n### Источники\n"]
-        for s in self._round_web_sources:
+            return
+        try:
+            from Interface.ui_prefs import load_prefs
+            from Interface.themes import get_theme
+            prefs = load_prefs()
+            theme = get_theme(str(prefs.get("theme", "Purple Dark")))
+            accent = str(prefs.get("accent_color") or theme.get("accent") or PURPLE)
+        except Exception:
+            accent = PURPLE
+
+        body = Text()
+        header = Text()
+        header.append(" ", style="")
+        header.append("Источники", style=f"bold {accent}")
+        header.append("   ", style="")
+        header.append(f"({len(self._round_web_sources)} шт.)", style=f"{GRAY}")
+        body.append_text(header)
+        body.append("\n", style="")
+        body.append("─" * 60, style=GRAY)
+        body.append("\n", style="")
+
+        for i, s in enumerate(self._round_web_sources[:30], start=1):
             u = s["url"]
             t = (s.get("title") or u).replace("\n", " ").strip()
-            t = t.replace("[", "(").replace("]", ")")
-            if len(t) > 160:
-                t = t[:157] + "…"
-            label = t if t else u
-            lines.append(f"- [{label}]({u})\n")
+            if len(t) > 90:
+                t = t[:87] + "…"
+            body.append(f"{i:>2}. ", style=f"bold {accent}")
+            body.append(f"{t}\n", style="#E5E7EB")
+            body.append(f"    {u}\n", style=GRAY)
+
+        extra = len(self._round_web_sources) - 30
+        if extra > 0:
+            body.append(f"… ещё {extra} источников\n", style=GRAY)
+
+        if body.plain.endswith("\n"):
+            body = body[:-1]
+
+        count = len(self._round_web_sources)
+        title = f"🌐 Источники  ·  {count} шт."
+        card = Collapsible(
+            Static(body),
+            title=title,
+            collapsed=True,
+            classes="round-card",
+        )
+        self._mount_main(card)
         self._round_web_sources.clear()
         self._round_web_seen.clear()
-        return (text or "").rstrip() + "".join(lines)
 
     def accumulate_tool_result(self, tool_name: str, result: Any) -> None:
         if tool_name not in _WRITE_TOOLS or not isinstance(result, dict):
@@ -1153,16 +1731,39 @@ class AIChatPanel(Vertical):
             d = 0
         self._round_file_deltas[path] = self._round_file_deltas.get(path, 0) + d
 
+        snapshot_id = str(result.get("snapshot_id") or "")
+        before, after = _read_before_after_texts(path, snapshot_id) if snapshot_id else ("", "")
+        if not snapshot_id and result.get("action") == "created_file":
+            try:
+                after = Path(path).read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                after = ""
+            before = ""
+
+        added, removed = _diff_stats(before, after)
+        if not added and not removed:
+            delta_val = self._round_file_deltas.get(path, 0)
+            if delta_val > 0:
+                added, removed = delta_val, 0
+            elif delta_val < 0:
+                added, removed = 0, -delta_val
+
+        agg = self._round_file_changes.setdefault(path, {"added": 0, "removed": 0})
+        agg["added"] += max(0, added)
+        agg["removed"] += max(0, removed)
+        if path not in self._round_file_order:
+            self._round_file_order.append(path)
+
+        if CodeDiffBlock is not None and (before or after):
+            if before != after:
+                try:
+                    action = str(result.get("action") or tool_name)
+                    self._mount_main(CodeDiffBlock(path, before, after, action=action))
+                except Exception:
+                    pass
+
     def _footer_for_assistant(self, usage: Optional[Dict[str, Any]]) -> str:
         parts: List[str] = []
-        if self._round_file_deltas:
-            bits = []
-            for p, d in sorted(self._round_file_deltas.items(), key=lambda x: x[0])[:12]:
-                name = Path(p).name
-                bits.append(f"{name} ({d:+d} стр.)" if d else f"{name} (0)")
-            if len(self._round_file_deltas) > 12:
-                bits.append("…")
-            parts.append("Файлы: " + ", ".join(bits))
         pct = round(100 * self._context_used / self._context_total) if self._context_total > 0 else 0
         parts.append(
             f"Окно чата: ~{pct}% (~{self._context_used:,} / ~{self._context_total:,} ток.)",
@@ -1259,6 +1860,8 @@ class AIChatPanel(Vertical):
                 self._lifetime_completion += max(0, out)
         footer = self._footer_for_assistant(usage)
         if not (body or "").strip():
+            self._mount_file_changes_table()
+            self._mount_sources_widget()
             self.reset_round_file_metrics()
             self._refresh_context_meter()
             return
@@ -1266,6 +1869,11 @@ class AIChatPanel(Vertical):
         mid = str(self._msg_seq)
         block = AssistantMessageBlock(body, footer, mid)
         self._mount_main(block)
+        # File-changes summary and sources are placed AFTER the final
+        # assistant reply, so the user reads the answer first and sees
+        # the follow-up recap cards below. This works in every mode.
+        self._mount_file_changes_table()
+        self._mount_sources_widget()
         self.reset_round_file_metrics()
         self._refresh_context_meter()
 
@@ -1275,7 +1883,7 @@ class AIChatPanel(Vertical):
         colors = self._ui_colors()
         msg = Text()
         msg.append("▸ ", style=colors["accent"])
-        msg.append(tool_name, style=f"bold {CYAN}")
+        msg.append(tool_name, style=f"bold {colors['accent']}")
         if summary:
             msg.append(f"  {summary[:180]}", style=colors["fg2"])
         self._mount_main(Static(msg, classes="stream-line"))
@@ -1289,6 +1897,25 @@ class AIChatPanel(Vertical):
         if summary:
             msg.append(f"  {summary[:180]}", style=DIM)
         self._mount_main(Static(msg, classes="stream-line"))
+
+    def add_tool_card(self, tool_name: str, result: Any) -> None:
+        """Mount a pretty, collapsible card for read-only / action tools.
+
+        Called from :meth:`Interface.tui_bridge.TUIBridge.on_tool_result`
+        for every tool whose name is in ``tool_card.PRETTY_TOOL_NAMES``.
+        This gives ``read_file`` / ``list_files`` / ``run_command`` the
+        same level of visual affordance as ``write_file`` (which uses
+        :class:`~Interface.panels.diff_block.CodeDiffBlock`).
+        """
+        if ToolCardBlock is None:
+            return self.add_tool_result(tool_name, str(result)[:120])
+        dedup_key = f"toolcard:{tool_name}:{str(result)[:80]}"
+        if self._is_duplicate_render(dedup_key):
+            return
+        try:
+            self._mount_main(ToolCardBlock(tool_name, result))
+        except Exception:
+            self.add_tool_result(tool_name, str(result)[:120])
 
     def add_thought(self, text: str, *, skip_dedup: bool = False) -> None:
         if not skip_dedup and self._is_duplicate_render(f"thought:{(text or '')[:120]}"):
@@ -1332,7 +1959,8 @@ class AIChatPanel(Vertical):
         self._mount_main(Static(Text(f"✓ {text}", style=f"bold {GREEN}"), classes="stream-line"))
 
     def add_warning(self, text: str) -> None:
-        self._mount_main(Static(Text(f"⚠ {text}", style=f"bold {YELLOW}"), classes="stream-line"))
+        accent = self._ui_colors()["accent"]
+        self._mount_main(Static(Text(f"⚠ {text}", style=f"bold {accent}"), classes="stream-line"))
 
     def add_separator(self, label: str = "") -> None:
         colors = self._ui_colors()
@@ -1345,18 +1973,91 @@ class AIChatPanel(Vertical):
 
     def add_file_indicator(self, path: str) -> None:
         name = Path(path).name if path else "unknown"
-        self._mount_main(Static(Text(f"📄 {name}", style=f"{BLUE}"), classes="stream-line"))
+        accent = self._ui_colors()["accent"]
+        self._mount_main(Static(Text(f"📄 {name}", style=f"{accent}"), classes="stream-line"))
+
+    # ─── Deep Solver checkpoints ────────────────────────────────────
+    # The Deep mode drops a checkpoint card in the chat every few
+    # tool-rounds (or when the model explicitly calls deep_checkpoint).
+    # The card exposes two buttons; pressing either trims the history
+    # back to that snapshot. "Continue" additionally plants a pseudo-
+    # attachment chip so the user can seed a prompt from that point.
+    def add_deep_checkpoint(self, cp_id: str, index: int, title: str,
+                            summary: str = "", turn_index: int = 0) -> None:
+        if DeepCheckpointBlock is None:
+            self._mount_main(Static(
+                Text(f"◆ Чекпоинт #{index}: {title}",
+                     style=f"bold {self._ui_colors()['accent']}"),
+                classes="stream-line",
+            ))
+            return
+        block = DeepCheckpointBlock(
+            checkpoint_id=cp_id, index=index, title=title,
+            summary=summary, turn_index=turn_index,
+        )
+        self._mount_main(block)
+
+    def set_deep_status(self, *, running: bool, elapsed: str = "",
+                        checkpoints: int = 0, model: str = "") -> None:
+        """Show / hide the status bar above the input while a Deep run
+        is alive. Called from :class:`Interface.tui_bridge.TUIBridge`
+        every few seconds so the elapsed-time badge stays fresh without
+        spamming the chat stream.
+        """
+        try:
+            bar = self.query_one("#deep-status-bar", Static)
+        except Exception:
+            return
+        if not running:
+            bar.remove_class("-active")
+            bar.update("")
+            return
+        accent = self._ui_colors().get("accent", "#8B5CF6")
+        label = Text()
+        label.append("◆ ", style=accent)
+        label.append("Deep Solver  ·  ", style=f"bold {accent}")
+        label.append(f"⏱ {elapsed or '0с'}", style="#E5E7EB")
+        if checkpoints:
+            label.append(f"  ·  чекпоинтов: {checkpoints}", style="#9CA3AF")
+        if model:
+            label.append(f"  ·  {model}", style="#6B7280")
+        bar.update(label)
+        bar.add_class("-active")
+
+    def add_deep_context_chip(self, cp_id: str, label: str) -> None:
+        """Planted by 'Continue from checkpoint' — shows up in the
+        attachment strip as a neutral chip so the next user message is
+        visibly anchored to that point in the project's timeline."""
+        try:
+            strip = self.query_one("#attachment-strip", Horizontal)
+        except Exception:
+            return
+        btn_id = f"deepcp-chip-{cp_id}"
+        try:
+            self.query_one(f"#{btn_id}")
+            return
+        except Exception:
+            pass
+        try:
+            strip.mount(Button(
+                f"◆ {label}\n(нажмите — убрать)",
+                id=btn_id,
+                classes="attach-chip",
+            ))
+        except Exception:
+            pass
 
     def add_code_block(self, code: str, language: str = "python", filepath: str = "") -> None:
+        accent = self._ui_colors()["accent"]
         label = filepath if filepath else language
         lines = [Text(f"│ {line}", style="#D1D5DB") for line in code[:1500].split("\n")[:16]]
-        self._mount_main(Static(Text(f"┌ {label}", style=CYAN), classes="stream-line"))
+        self._mount_main(Static(Text(f"┌ {label}", style=accent), classes="stream-line"))
         for ln in lines:
             self._mount_main(Static(ln, classes="stream-line"))
         rest = len(code.split("\n")) - 16
         if rest > 0:
             self._mount_main(Static(Text(f"│ … +{rest} строк", style=DIM), classes="stream-line"))
-        self._mount_main(Static(Text("└", style=CYAN), classes="stream-line"))
+        self._mount_main(Static(Text("└", style=accent), classes="stream-line"))
 
     def _refresh_context_meter(self) -> None:
         used = self._context_used
@@ -1367,10 +2068,11 @@ class AIChatPanel(Vertical):
         filled = round(bar_w * pct / 100)
         filled = max(0, min(bar_w, filled))
         bar = "[" + "=" * filled + "-" * (bar_w - filled) + "]"
+        accent = self._ui_colors()["accent"]
         if pct < 50:
             pct_style = GREEN
-        elif pct < 80:
-            pct_style = YELLOW
+        elif pct < 85:
+            pct_style = accent
         else:
             pct_style = RED
         try:
@@ -1420,6 +2122,69 @@ class AIChatPanel(Vertical):
             self.query_one("#stop-btn", Button).remove_class("visible")
         except Exception:
             pass
+
+    def start_creator_progress(self, task: str = "", total_workers: int = 0) -> None:
+        """Mount the Creator Mode progress strip above the input area.
+
+        Safe to call multiple times — the previous block is replaced.
+        """
+        if CreatorProgressBlock is None:
+            return
+        try:
+            slot = self.query_one("#creator-progress-slot", Vertical)
+        except Exception:
+            return
+        try:
+            for child in list(slot.children):
+                try:
+                    child.remove()
+                except Exception:
+                    pass
+            self._creator_progress = None
+            try:
+                slot.remove_class("hidden")
+            except Exception:
+                pass
+            block = CreatorProgressBlock(task=task, total_workers=int(total_workers or 0))
+            self._creator_progress = block
+            slot.mount(block)
+        except Exception:
+            self._creator_progress = None
+
+    def update_creator_progress(
+        self,
+        phase: str = "",
+        percent: float = 0.0,
+        completed: int = 0,
+        total: int = 0,
+    ) -> None:
+        """Update the creator progress block with new phase / percent values."""
+        block = self._creator_progress
+        if block is None:
+            return
+        try:
+            block.update_progress(
+                phase=phase or None,
+                percent=float(percent) if percent is not None else None,
+                completed=int(completed) if completed is not None else None,
+                total=int(total) if total is not None else None,
+            )
+        except Exception:
+            pass
+
+    def finish_creator_progress(self, summary: str = "") -> None:
+        """Fill the strip to 100 % — the widget tears itself down when done."""
+        block = self._creator_progress
+        if block is None:
+            return
+        try:
+            block.finish(summary=summary or "")
+        except Exception:
+            pass
+        # Release our reference right away: the widget will self-remove once
+        # its own animation catches up, and a new start_creator_progress call
+        # will safely replace any lingering child in the slot.
+        self._creator_progress = None
 
     def update_creator_worker(self, worker_id: str, tool_name: str = "",
                                action: str = "", thinking: str = "") -> None:
@@ -1511,6 +2276,98 @@ class AIChatPanel(Vertical):
                 self.remove_pending_image_index(idx)
             except ValueError:
                 pass
+        elif bid.startswith("deepcp-chip-"):
+            try:
+                event.button.remove()
+            except Exception:
+                pass
+
+    @on(Button.Pressed, ".deepcp-rollback")
+    def on_deep_checkpoint_rollback(self, event: Button.Pressed) -> None:
+        """Rollback: restore snapshot, trim chat, discard checkpoint."""
+        event.stop()
+        bid = event.button.id or ""
+        cp_id = bid[len("deepcp-rollback-"):] if bid.startswith("deepcp-rollback-") else ""
+        if not cp_id:
+            return
+        self.post_message(DeepCheckpointAction(cp_id=cp_id, action="rollback"))
+        self._mark_deep_checkpoint_done(cp_id, note="Откат запущен")
+
+    @on(Button.Pressed, ".deepcp-continue")
+    def on_deep_checkpoint_continue(self, event: Button.Pressed) -> None:
+        """Continue: same rollback + plant a context chip for the next prompt."""
+        event.stop()
+        bid = event.button.id or ""
+        cp_id = bid[len("deepcp-continue-"):] if bid.startswith("deepcp-continue-") else ""
+        if not cp_id:
+            return
+        self.post_message(DeepCheckpointAction(cp_id=cp_id, action="continue"))
+        self._mark_deep_checkpoint_done(cp_id, note="Продолжаем с этого чекпоинта")
+
+    def _mark_deep_checkpoint_done(self, cp_id: str, note: str = "") -> None:
+        if DeepCheckpointBlock is None:
+            return
+        try:
+            for block in self.query(DeepCheckpointBlock):
+                if getattr(block, "checkpoint_id", "") == cp_id:
+                    block.mark_done(note)
+                    break
+        except Exception:
+            pass
+
+    # ─── Download progress widget ────────────────────
+    #
+    # ``TUIBridge.on_download_progress`` drops ticks here. We lazily
+    # create a :class:`DownloadProgressBlock` keyed by ``download_id``
+    # and update it in place until the final ``done=True`` tick arrives.
+
+    def update_download_progress(self, *, download_id: str, url: str,
+                                 received_bytes: int, total_bytes: int,
+                                 elapsed: float, done: bool,
+                                 error: str = "") -> None:
+        if DownloadProgressBlock is None:
+            return
+        block: Optional[DownloadProgressBlock] = None
+        try:
+            for b in self.query(DownloadProgressBlock):
+                if getattr(b, "download_id", "") == download_id:
+                    block = b
+                    break
+        except Exception:
+            block = None
+        if block is None:
+            try:
+                block = DownloadProgressBlock(download_id=download_id, url=url)
+                self._mount_main(block)
+            except Exception:
+                return
+        try:
+            block.update_progress(
+                received=received_bytes, total=total_bytes,
+                elapsed=elapsed, done=done, error=error,
+            )
+        except Exception:
+            pass
+
+    @on(Button.Pressed, ".dl-cancel")
+    def on_download_cancel(self, event: Button.Pressed) -> None:
+        """Cancel button on a ``DownloadProgressBlock`` — sets the
+        cancellation flag the streaming download loop polls."""
+        event.stop()
+        bid = event.button.id or ""
+        if not bid.startswith("dl-cancel-"):
+            return
+        download_id = bid[len("dl-cancel-"):]
+        try:
+            from Agent.tools.download_tool import cancel_download
+            cancel_download(download_id)
+        except Exception:
+            pass
+        try:
+            event.button.label = "Отмена…"
+            event.button.disabled = True
+        except Exception:
+            pass
 
     @on(Button.Pressed, "#send-btn")
     def on_send_click(self) -> None:
@@ -1519,6 +2376,58 @@ class AIChatPanel(Vertical):
     @on(Button.Pressed, "#stop-btn")
     def on_stop_click(self) -> None:
         self.post_message(StopRequested())
+
+    def _broadcast_accent_refresh(self) -> None:
+        """Walk the widget tree and call refresh_accent() on every widget that supports it.
+
+        This lets custom widgets (UserMessageBlock, CodeDiffBlock, CreatorProgressBlock,
+        and re-renderable Label titles) re-render their inline Rich text with the
+        freshly-picked accent colour — no app restart required.
+        """
+        try:
+            root = self.app
+        except Exception:
+            root = self
+        try:
+            widgets = list(root.query("*"))
+        except Exception:
+            widgets = []
+        for w in widgets:
+            fn = getattr(w, "refresh_accent", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+        # Accent-styled Label/Static built via _section_title/_settings_title/_settings_row
+        # carry a dedicated class so we can re-colour them in-place.
+        try:
+            from Interface.ui_prefs import load_prefs
+            from Interface.themes import get_theme
+            prefs = load_prefs()
+            theme = get_theme(str(prefs.get("theme", "Purple Dark")))
+            accent = str(prefs.get("accent_color") or theme.get("accent") or PURPLE)
+        except Exception:
+            accent = self._accent()
+        for cls in (
+            "settings-section-title",
+            "settings-card-title",
+            "settings-row-label",
+            "param-cell-label",
+        ):
+            try:
+                for lbl in root.query(f".{cls}"):
+                    try:
+                        txt = lbl.renderable
+                        raw = txt.plain if hasattr(txt, "plain") else str(txt)
+                        lbl.update(Text(raw, style=f"bold {accent}"))
+                    except Exception:
+                        try:
+                            lbl.styles.color = accent
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
     def on_apply_accent(self) -> None:
         color = (self.app.query_one("#sp-accent", Input).value or "").strip()
@@ -1530,6 +2439,7 @@ class AIChatPanel(Vertical):
             from Interface.themes import apply_theme
             save_prefs(accent_color=color)
             apply_theme(self.app, str(load_prefs().get("theme", "Purple Dark")))
+            self._broadcast_accent_refresh()
             self.notify("Цвет обновлён")
         except Exception as e:
             self.notify(f"Accent error: {e}", severity="error")
@@ -1548,6 +2458,7 @@ class AIChatPanel(Vertical):
                 from Interface.themes import apply_theme
                 save_prefs(accent_color=color)
                 apply_theme(self.app, str(load_prefs().get("theme", "Purple Dark")))
+                self._broadcast_accent_refresh()
                 self.notify("Цвет обновлён")
             except Exception:
                 pass
@@ -1563,6 +2474,7 @@ class AIChatPanel(Vertical):
             theme_name = str(event.value)
             save_prefs(theme=theme_name)
             apply_theme(self.app, theme_name)
+            self._broadcast_accent_refresh()
         except Exception as e:
             self.notify(f"Theme error: {e}", severity="error")
 
@@ -1616,6 +2528,57 @@ class AIChatPanel(Vertical):
         except Exception as e:
             self.notify(f"Ошибка: {e}", severity="error")
 
+    def on_sa_custom_tools(self, event: Checkbox.Changed) -> None:
+        try:
+            from Interface.ui_prefs import save_prefs
+            save_prefs(custom_tools_enabled=bool(event.value))
+            self.notify("кастом-тулы: " + ("ON" if event.value else "OFF"))
+        except Exception as e:
+            self.notify(f"Ошибка: {e}", severity="error")
+
+    def on_sa_orch_mode(self, event: Select.Changed) -> None:
+        if not event.value or event.value == Select.BLANK:
+            return
+        try:
+            from Interface.ui_prefs import save_prefs
+            save_prefs(orchestration_mode=str(event.value))
+            self.notify(f"Оркестрация: {event.value}")
+        except Exception as e:
+            self.notify(f"Ошибка: {e}", severity="error")
+
+    def on_sa_research_deep_fetch(self, event: Checkbox.Changed) -> None:
+        try:
+            from Interface.ui_prefs import save_prefs
+            save_prefs(research_deep_fetch=bool(event.value))
+            self.notify("deep fetch: " + ("ON" if event.value else "OFF"))
+        except Exception as e:
+            self.notify(f"Ошибка: {e}", severity="error")
+
+    def on_sa_apply(self) -> None:
+        """Persist orchestration / research numeric knobs entered by the user."""
+        def _int(wid: str, default: int) -> int:
+            try:
+                raw = (self.app.query_one(wid, Input).value or "").strip()
+                return max(1, int(raw))
+            except Exception:
+                return default
+        try:
+            from Interface.ui_prefs import save_prefs
+            save_prefs(
+                orchestration_max_workers=_int("#sa-orch-max-workers", 4),
+                research_max_sources=_int("#sa-research-max-sources", 6),
+                research_max_rounds=_int("#sa-research-max-rounds", 3),
+            )
+            try:
+                self.app.query_one("#sa-status", Static).update(
+                    Text("Сохранено. Применится к следующему запуску.", style=GREEN),
+                )
+            except Exception:
+                pass
+            self.notify("Настройки агента сохранены")
+        except Exception as e:
+            self.notify(f"Ошибка: {e}", severity="error")
+
     def on_sor_check_balance(self) -> None:
         display = self.app.query_one("#sor-balance-display", Static)
 
@@ -1637,10 +2600,25 @@ class AIChatPanel(Vertical):
                 return
             try:
                 from Agent.llm_provider import fetch_openrouter_credits, format_credits_info
+                from Interface.panels.usage_calendar import record_cumulative_usage, UsageCalendar
 
                 creds = fetch_openrouter_credits(key)
                 if creds:
                     self.app.call_from_thread(display.update, format_credits_info(creds))
+                    try:
+                        total_usd = float(creds.get("usage", 0.0) or 0.0)
+                        record_cumulative_usage(total_usd)
+                    except Exception:
+                        pass
+
+                    def _refresh_cal() -> None:
+                        try:
+                            cal = self.app.query_one("#sor-usage-calendar", UsageCalendar)
+                            cal.reload()
+                        except Exception:
+                            pass
+
+                    self.app.call_from_thread(_refresh_cal)
                 else:
                     self.app.call_from_thread(
                         display.update,
@@ -1744,7 +2722,7 @@ class AIChatPanel(Vertical):
             "top_k": _i("#sol-param-top-k", 40),
             "repeat_penalty": _f("#sol-param-repeat-penalty", 1.1),
             "num_ctx": _i("#sol-param-num-ctx", 32768),
-            "num_predict": _i("#sol-param-num-predict", 2048),
+            "num_predict": _i("#sol-param-num-predict", 8192),
             "stop": stop_raw,
         }
 
@@ -1762,7 +2740,7 @@ class AIChatPanel(Vertical):
             self.app.query_one("#sol-param-top-k", Input).value = str(pv.get("top_k", 40))
             self.app.query_one("#sol-param-repeat-penalty", Input).value = str(pv.get("repeat_penalty", 1.1))
             self.app.query_one("#sol-param-num-ctx", Input).value = str(pv.get("num_ctx", 32768))
-            self.app.query_one("#sol-param-num-predict", Input).value = str(pv.get("num_predict", 2048))
+            self.app.query_one("#sol-param-num-predict", Input).value = str(pv.get("num_predict", 8192))
             self.app.query_one("#sol-param-stop", Input).value = str(pv.get("stop", ""))
         except Exception:
             pass
@@ -1845,7 +2823,7 @@ class AIChatPanel(Vertical):
             self.app.query_one("#sol-param-top-k", Input).value = str(ms.get("top_k", 40))
             self.app.query_one("#sol-param-repeat-penalty", Input).value = str(ms.get("repeat_penalty", 1.1))
             self.app.query_one("#sol-param-num-ctx", Input).value = str(ms.get("num_ctx", 32768))
-            self.app.query_one("#sol-param-num-predict", Input).value = str(ms.get("num_predict", 2048))
+            self.app.query_one("#sol-param-num-predict", Input).value = str(ms.get("num_predict", 8192))
             self.app.query_one("#sol-param-stop", Input).value = str(ms.get("stop", ""))
         except Exception:
             pass
@@ -1939,22 +2917,32 @@ class AIChatPanel(Vertical):
 
 
 class _AccentPaletteDialog(ModalScreen):
-    DEFAULT_CSS = """
+    from Interface.modal_style import MODAL_SHARED_CSS as _SHARED_CSS
+
+    DEFAULT_CSS = _SHARED_CSS + """
     _AccentPaletteDialog { align: center middle; }
     #apd-container {
-        width: 64;
+        width: 70;
         height: auto;
-        max-height: 16;
-        background: #1a1a2e;
-        border: solid #8B5CF6;
-        padding: 1 2;
+        max-height: 18;
     }
-    #apd-container Horizontal { height: auto; }
-    #apd-container Button {
+    #apd-title { height: auto; }
+    #apd-container Horizontal {
+        height: auto;
+        layout: horizontal;
+        margin: 0 0 1 0;
+    }
+    #apd-container Horizontal Button {
         min-width: 6;
         width: 6;
         height: 3;
-        margin: 0 1 1 0;
+        margin: 0 1 0 0;
+        border: tall #2D2D3D;
+    }
+    #apd-cancel {
+        min-width: 14;
+        height: 3;
+        margin: 1 0 0 0;
     }
     """
 
@@ -1964,8 +2952,8 @@ class _AccentPaletteDialog(ModalScreen):
         self._callback = callback
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="apd-container"):
-            yield Label("Палитра accent color")
+        with Vertical(id="apd-container", classes="modal-card"):
+            yield Label("Палитра accent color", id="apd-title", classes="modal-title")
             with Horizontal():
                 for i in range(0, min(8, len(self._colors))):
                     yield Button("  ", id=f"apd-pick-{i}")
@@ -1978,6 +2966,13 @@ class _AccentPaletteDialog(ModalScreen):
             yield Button("Отмена", id="apd-cancel")
 
     def on_mount(self) -> None:
+        from Interface.modal_style import apply_accent_to
+        apply_accent_to(
+            self,
+            container_id="apd-container",
+            title_id="apd-title",
+            title_text="Палитра accent color",
+        )
         for i, color in enumerate(self._colors):
             try:
                 b = self.query_one(f"#apd-pick-{i}", Button)

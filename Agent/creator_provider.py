@@ -9,14 +9,22 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_openai import ChatOpenAI
 
 try:
-    from .llm_provider import get_llm, load_config, save_config, _env
+    from .llm_provider import (
+        get_llm, load_config, save_config, _env,
+        _resolve_ollama_settings, _build_ollama_chat_llm, _build_ollama_openai_llm,
+        _HAS_CHAT_OLLAMA,
+    )
 except ImportError:
-    from Agent.llm_provider import get_llm, load_config, save_config, _env
+    from Agent.llm_provider import (
+        get_llm, load_config, save_config, _env,
+        _resolve_ollama_settings, _build_ollama_chat_llm, _build_ollama_openai_llm,
+        _HAS_CHAT_OLLAMA,
+    )
 
 
 # ─── Конфигурация Creator Mode ─────────────────────────────────────
@@ -27,16 +35,38 @@ DEFAULT_MAX_WORKERS = 4
 
 
 def get_creator_config() -> Dict[str, Any]:
-    """Загрузить конфигурацию creator mode."""
+    """Загрузить конфигурацию creator mode.
+
+    UI-level настройки (orchestration / max_workers) имеют приоритет над project
+    config, чтобы пользователь мог менять их из экрана Settings → Agents без
+    перезапуска приложения. Это работает одинаково для локальных и удалённых
+    моделей — creator читает один и тот же блок.
+    """
     cfg = load_config()
     creator = cfg.get("creator", {})
     orch = str(creator.get("orchestration", "parallel") or "parallel").lower().strip()
+    max_workers = int(creator.get("max_workers", DEFAULT_MAX_WORKERS) or DEFAULT_MAX_WORKERS)
+
+    # Override with UI prefs when available.
+    try:
+        from Interface.ui_prefs import load_prefs
+        prefs = load_prefs()
+        ui_orch = str(prefs.get("orchestration_mode", "") or "").lower().strip()
+        mode_map = {"parallel": "parallel", "pipeline": "sequential", "auto": orch}
+        if ui_orch in mode_map:
+            orch = mode_map[ui_orch]
+        ui_workers = int(prefs.get("orchestration_max_workers", 0) or 0)
+        if ui_workers > 0:
+            max_workers = ui_workers
+    except Exception:
+        pass
+
     if orch not in ("parallel", "sequential", "supervisor", "hierarchical"):
         orch = "parallel"
     return {
         "local_base_url": creator.get("local_base_url", _env("OPENAI_API_BASE", DEFAULT_LOCAL_BASE_URL)),
         "local_model": creator.get("local_model", DEFAULT_LOCAL_MODEL),
-        "max_workers": creator.get("max_workers", DEFAULT_MAX_WORKERS),
+        "max_workers": max_workers,
         "enabled": creator.get("enabled", False),
         "orchestration": orch,
     }
@@ -83,13 +113,36 @@ def _resolve_local_base_url(base_url: str) -> str:
     return url + "/v1"
 
 
+def _looks_like_ollama_url(url: str) -> bool:
+    """Heuristic: true when the URL looks like a bare Ollama daemon
+    (default port 11434, or no `/api`/OpenWebUI suffix)."""
+    low = (url or "").strip().lower().rstrip("/")
+    if not low:
+        return False
+    if ":11434" in low:
+        return True
+    if low.endswith("/api") or low.endswith("/api/v1"):
+        # OpenWebUI / vLLM / LM Studio-compat — use OpenAI /v1 transport.
+        return False
+    # Ends with /v1 or bare host: could still be Ollama /v1 compat.
+    # Treat as Ollama when default-looking (localhost / LAN IP on 11434 only).
+    return False
+
+
 def get_local_llm(
     model_name: Optional[str] = None,
     base_url: Optional[str] = None,
     temperature: float = 0.2,
     max_tokens: int = 8192,
-) -> ChatOpenAI:
-    """Создаёт ChatOpenAI подключённый к локальному серверу.
+) -> Any:
+    """Создаёт LLM для локального сервера.
+
+    Автоматически выбирает транспорт:
+    - native Ollama через ChatOllama (`/api/chat`), когда URL похож на Ollama
+      daemon (порт 11434) и `langchain-ollama` доступен — это даёт правильную
+      обработку tool-calls и честное применение `num_ctx`/`top_k`/`repeat_penalty`.
+    - OpenAI-compat `ChatOpenAI` во всех остальных случаях (OpenWebUI, LM Studio,
+      vLLM, любые custom /v1 эндпоинты).
 
     Args:
         model_name: Имя модели (по умолчанию из конфига)
@@ -98,7 +151,7 @@ def get_local_llm(
         max_tokens: Максимум токенов ответа
 
     Returns:
-        ChatOpenAI инстанс для локальной модели
+        ChatOllama или ChatOpenAI инстанс, подключённый к локальному серверу.
     """
     config = get_creator_config()
     if model_name is None:
@@ -106,13 +159,32 @@ def get_local_llm(
     if base_url is None:
         base_url = config["local_base_url"]
 
+    wire_name = str(model_name).split("/", 1)[1] if str(model_name).startswith("ollama/") else str(model_name)
+
+    if _HAS_CHAT_OLLAMA and _looks_like_ollama_url(base_url):
+        try:
+            import os as _os
+            prev = _os.environ.get("OLLAMA_BASE_URL")
+            _os.environ["OLLAMA_BASE_URL"] = base_url
+            try:
+                settings = _resolve_ollama_settings(wire_name, temperature, max_tokens)
+                return _build_ollama_chat_llm(wire_name, settings)
+            finally:
+                if prev is None:
+                    _os.environ.pop("OLLAMA_BASE_URL", None)
+                else:
+                    _os.environ["OLLAMA_BASE_URL"] = prev
+        except Exception:
+            # Fall through to ChatOpenAI as safety net.
+            pass
+
     resolved_url = _resolve_local_base_url(base_url)
     api_key = _resolve_local_api_key()
 
     return ChatOpenAI(
         base_url=resolved_url,
         api_key=api_key,
-        model=model_name,
+        model=wire_name,
         temperature=temperature,
         max_tokens=max_tokens,
         request_timeout=180,  # Локальные модели могут быть медленнее
@@ -133,8 +205,19 @@ def get_heavy_llm() -> Tuple[ChatOpenAI, str]:
 def check_local_server(base_url: Optional[str] = None) -> bool:
     """Проверить доступность локального сервера (включая аутентификацию).
 
+    Пробует разные варианты API в порядке популярности:
+      • OpenAI-совместимые: ``/v1/models``, ``/models``.
+      • Ollama native: ``/api/tags``, ``/api/version``.
+      • OpenWebUI: ``/api/models`` (когда base_url уже оканчивается на ``/api``,
+        это превращается просто в ``/models``, но мы его и так проверим).
+    Также дополнительно дергаем «родительскую» версию без последнего сегмента,
+    чтобы URL вида ``.../api`` или ``.../v1`` не оставался «недоступным», если
+    сервер отвечает 200 на ``http://host:3000/``.
+
     Returns:
-        True если сервер отвечает и аутентификация проходит
+        True если какой-то эндпоинт ответил 200 / 404 (значит хост есть).
+        False только если все попытки вернули соединение-refused / timeout
+        или 401/403 (аутентификация).
     """
     import urllib.request
     import urllib.error
@@ -143,15 +226,29 @@ def check_local_server(base_url: Optional[str] = None) -> bool:
     url = (base_url or config["local_base_url"]).rstrip("/")
     api_key = _resolve_local_api_key()
 
-    # Попробовать OpenAI-совместимые эндпоинты
-    endpoints = [
-        f"{url}/v1/models",
-        f"{url}/models",
-    ]
-    # Если URL уже содержит /v1, попробовать /models напрямую
-    if url.endswith("/v1"):
-        endpoints = [f"{url}/models"] + endpoints
+    # Нормализуем несколько полезных корней: исходный, без /v1, без /api.
+    roots = {url}
+    for suffix in ("/v1", "/api", "/v1/chat/completions", "/api/chat/completions"):
+        if url.endswith(suffix):
+            roots.add(url[: -len(suffix)].rstrip("/"))
 
+    candidates: List[str] = []
+    for root in roots:
+        if not root:
+            continue
+        candidates.extend([
+            f"{root}/v1/models",        # OpenAI-compat (LM Studio, vLLM, OpenWebUI)
+            f"{root}/models",           # некоторые прокси
+            f"{root}/api/models",       # OpenWebUI
+            f"{root}/api/tags",         # Ollama native
+            f"{root}/api/version",      # Ollama native (иногда единственное без auth)
+            f"{root}/",                 # base index — последний шанс
+        ])
+    # Убираем дубли, сохраняя порядок.
+    seen: set[str] = set()
+    endpoints = [e for e in candidates if not (e in seen or seen.add(e))]
+
+    had_auth_failure = False
     for endpoint in endpoints:
         try:
             req = urllib.request.Request(endpoint, method="GET")
@@ -159,15 +256,24 @@ def check_local_server(base_url: Optional[str] = None) -> bool:
             if api_key and api_key != "not-needed":
                 req.add_header("Authorization", f"Bearer {api_key}")
             with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status == 200:
+                if 200 <= resp.status < 500:
                     return True
         except urllib.error.HTTPError as e:
-            if e.code == 401 or e.code == 403:
-                # Сервер доступен, но аутентификация не прошла
-                return False
+            if e.code in (401, 403):
+                had_auth_failure = True
+                continue
+            # 404/405 и пр. значат, что хост отвечает — сервер жив.
+            if 400 <= e.code < 500:
+                return True
             continue
         except Exception:
             continue
+
+    # Сервер хоть раз ответил 401/403 — хост есть, просто нет ключа. Для
+    # Deep-режима это не фатально (LLM всё равно попытается со своим
+    # ключом/без него), поэтому возвращаем True, чтобы не блокировать запуск.
+    if had_auth_failure:
+        return True
 
     return False
 
