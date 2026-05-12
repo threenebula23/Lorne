@@ -9,9 +9,9 @@
 
 ```mermaid
 flowchart LR
-  user[User] --> rag[rag_search_brain_first]
-  rag --> read[read_file_project_brain]
-  read --> code[Source_files]
+  userNode[User] --> ragNode[RAG brain first]
+  ragNode --> readNode[read_file project_brain]
+  readNode --> codeNode[Source files]
 ```
 
 ## Инструменты

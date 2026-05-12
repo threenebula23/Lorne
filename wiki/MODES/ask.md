@@ -9,10 +9,10 @@
 
 ```mermaid
 flowchart LR
-  user[User] --> chat[Chat]
-  chat --> graph[Agent_graph]
-  graph --> llm[LLM]
-  llm --> tools[Read_only_tools]
+  userNode[User] --> chatNode[Chat]
+  chatNode --> graphNode[Agent graph]
+  graphNode --> llmNode[LLM]
+  llmNode --> toolsNode[Read-only tools]
 ```
 
 ## Инструменты

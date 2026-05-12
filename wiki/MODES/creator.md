@@ -10,11 +10,11 @@
 
 ```mermaid
 flowchart TB
-  user[User] --> creator[Creator_orchestrator]
-  creator --> w1[Worker_1_graph]
-  creator --> w2[Worker_2_graph]
-  w1 --> tools[Same_tool_names]
-  w2 --> tools
+  userNode[User] --> creatorNode[Creator orchestrator]
+  creatorNode --> worker1Node[Worker 1]
+  creatorNode --> worker2Node[Worker 2]
+  worker1Node --> toolsNode[Shared tool names]
+  worker2Node --> toolsNode
 ```
 
 ## Инструменты

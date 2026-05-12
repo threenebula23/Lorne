@@ -10,13 +10,13 @@
 
 ```mermaid
 flowchart LR
-  user[User] --> input[AIChatPanel]
-  input --> app[LorneApp]
-  app --> thread[Agent_thread]
-  thread --> graph[LangGraph_runner]
-  graph --> llm[LLM_bind_tools]
-  llm --> tools[Tools_invoke]
-  tools --> fs[Workspace_FS]
+  userNode[User] --> inputNode[AIChatPanel]
+  inputNode --> appNode[LorneApp]
+  appNode --> threadNode[Agent thread]
+  threadNode --> langGraphNode[LangGraph]
+  langGraphNode --> llmNode[LLM and tools]
+  llmNode --> toolsNode[Tool invocations]
+  toolsNode --> fsNode[Workspace FS]
 ```
 
 ## Инструменты

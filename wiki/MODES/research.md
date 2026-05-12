@@ -9,11 +9,11 @@
 
 ```mermaid
 flowchart LR
-  user[User] --> chat[Chat]
-  chat --> graph[Graph]
-  graph --> web[web_search_web_fetch]
-  graph --> lib[library_context]
-  graph --> rag[rag_search]
+  userNode[User] --> chatNode[Chat]
+  chatNode --> workflowNode[Graph]
+  workflowNode --> webNode[Web search and fetch]
+  workflowNode --> libNode[library_context]
+  workflowNode --> ragNode[rag_search]
 ```
 
 ## Инструменты

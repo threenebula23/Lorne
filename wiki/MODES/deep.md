@@ -23,11 +23,11 @@
 
 ```mermaid
 flowchart TB
-  user[User] --> ui[Deep_UI_controls]
-  ui --> loop[Deep_legacy_loop]
-  loop --> local[Local_LLM]
-  loop --> tools[Tools_same_registry_subset]
-  loop --> cp[Checkpoints]
+  userNode[User] --> uiNode[Deep UI]
+  uiNode --> loopNode[Deep legacy loop]
+  loopNode --> localNode[Local LLM]
+  loopNode --> toolsNode[Tools subset]
+  loopNode --> cpNode[Checkpoints]
 ```
 
 ## Инструменты
