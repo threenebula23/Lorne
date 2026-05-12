@@ -40,8 +40,8 @@
 **macOS / Linux:**
 
 ```bash
-git clone https://github.com/threenebula23/TCA.git
-cd TCA
+git clone https://github.com/threenebula23/Lorne.git
+cd Lorne
 chmod +x install.sh
 ./install.sh
 ```
@@ -49,8 +49,8 @@ chmod +x install.sh
 **Windows:**
 
 ```cmd
-git clone https://github.com/threenebula23/TCA.git
-cd TCA
+git clone https://github.com/threenebula23/Lorne.git
+cd Lorne
 install.bat
 ```
 
@@ -95,10 +95,10 @@ python -m Terminal --classic
 
 Явно включить TUI: `lorne --tui` или `TCA_MODE=tui` (значение по умолчанию).
 
-Альтернативный способ запуска (без установки) — тот же разбор `env=` и каталога через `python tca.py`:
+Альтернативный способ запуска (без установки) — тот же разбор `env=` и каталога через `python lorne.py`:
 
 ```bash
-python tca.py
+python lorne.py
 python -m Terminal              # TUI; для classic: python -m Terminal --classic
 ```
 
