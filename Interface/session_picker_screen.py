@@ -105,7 +105,7 @@ class SessionPickerScreen(ModalScreen[Optional[Dict[str, Any]]]):
                             yield Button("Удалить", id=f"sp-del-{sid}", variant="error")
             with Horizontal(id="sp-bottom", classes="modal-footer"):
                 yield Button("Новый чат", id="sp-new", variant="success")
-                yield Button("Выход из TCA", id="sp-quit", variant="default")
+                yield Button("Выход из Lorne", id="sp-quit", variant="default")
 
     def on_mount(self) -> None:
         apply_accent_to(

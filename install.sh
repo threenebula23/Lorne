@@ -1,20 +1,21 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════
-#  TCA — Terminal Coding Assistant — Установка
+#  Lorne v0.98 — терминальный ассистент для кода — установка
 # ═══════════════════════════════════════════════════════
 #
 #  Этот скрипт:
 #  1. Создаёт виртуальное окружение (если его нет)
 #  2. Устанавливает зависимости
-#  3. Создаёт команду `tca` доступную из любой директории
+#  3. Создаёт команды ``lorne`` и ``tca`` (алиас) в PATH
 #
 #  Использование:
 #    chmod +x install.sh && ./install.sh
 #
 #  После установки:
-#    tca                          — запуск в текущей директории
-#    tca /path/to/project         — запуск в указанном проекте
-#    tca env=sk-or-v1-ваш_ключ   — запуск с API ключом OpenRouter
+#    lorne                        — запуск в текущей директории
+#    lorne /path/to/project       — запуск в указанном проекте
+#    lorne env=sk-or-v1-ваш_ключ  — запуск с API ключом OpenRouter
+#    tca …                        — то же (совместимость со старыми инструкциями)
 # ═══════════════════════════════════════════════════════
 
 set -e
@@ -27,7 +28,7 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
-TCA_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_T0=$(date +%s)
 
 _elapsed_s() {
@@ -35,7 +36,7 @@ _elapsed_s() {
 }
 
 # Прогресс: [████░░░░] step/total  Ns  сообщение
-_tca_progress() {
+_install_progress() {
     local step="$1"
     local total="$2"
     local msg="$3"
@@ -54,7 +55,7 @@ _tca_progress() {
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}║  TCA — Установка Terminal Coding Assistant   ║${RESET}"
+echo -e "${BOLD}║  Lorne v0.98 — установка                      ║${RESET}"
 echo -e "${BOLD}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
 
@@ -79,34 +80,34 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-_tca_progress 1 "$TOTAL_STEPS" "Проверка Python: $($PYTHON --version 2>&1)"
+_install_progress 1 "$TOTAL_STEPS" "Проверка Python: $($PYTHON --version 2>&1)"
 
 # ─── Virtual environment ────────────────────────────
-VENV_DIR="$TCA_DIR/.venv"
+VENV_DIR="$REPO_ROOT/.venv"
 
 if [ ! -d "$VENV_DIR" ]; then
-    _tca_progress 2 "$TOTAL_STEPS" "Создание виртуального окружения…"
+    _install_progress 2 "$TOTAL_STEPS" "Создание виртуального окружения…"
     $PYTHON -m venv "$VENV_DIR"
 else
-    _tca_progress 2 "$TOTAL_STEPS" "Виртуальное окружение уже есть"
+    _install_progress 2 "$TOTAL_STEPS" "Виртуальное окружение уже есть"
 fi
 
 # Activate venv
 source "$VENV_DIR/bin/activate"
 
 # ─── Dependencies ───────────────────────────────────
-_tca_progress 3 "$TOTAL_STEPS" "Обновление pip…"
+_install_progress 3 "$TOTAL_STEPS" "Обновление pip…"
 pip install --quiet --upgrade pip
 
-_tca_progress 4 "$TOTAL_STEPS" "Установка зависимостей (requirements.txt)…"
+_install_progress 4 "$TOTAL_STEPS" "Установка зависимостей (requirements.txt)…"
 echo -e "  ${DIM}(ниже — прогресс pip: загрузка и установка пакетов)${RESET}"
-pip install -r "$TCA_DIR/requirements.txt"
+pip install -r "$REPO_ROOT/requirements.txt"
 echo -e "  ${GREEN}✓${RESET} Зависимости установлены"
 
 # ─── .env check ─────────────────────────────────────
-ENV_FILE="$TCA_DIR/Agent/.env"
+ENV_FILE="$REPO_ROOT/Agent/.env"
 if [ ! -f "$ENV_FILE" ]; then
-    ENV_ROOT="$TCA_DIR/.env"
+    ENV_ROOT="$REPO_ROOT/.env"
     if [ ! -f "$ENV_ROOT" ]; then
         echo ""
         echo -e "  ${YELLOW}⚠ Файл .env не найден!${RESET}"
@@ -116,16 +117,20 @@ if [ ! -f "$ENV_FILE" ]; then
     fi
 fi
 
-# ─── Create `tca` command ───────────────────────────
-_tca_progress 5 "$TOTAL_STEPS" "Создание команды tca и ссылка в PATH…"
+# ─── Команды ``lorne`` и ``tca`` (алиас в venv) ──────
+_install_progress 5 "$TOTAL_STEPS" "Создание команд lorne / tca и ссылки в PATH…"
 
-TCA_BIN="$VENV_DIR/bin/tca"
-cat > "$TCA_BIN" << SCRIPT
+LORNE_BIN="$VENV_DIR/bin/lorne"
+cat > "$LORNE_BIN" << SCRIPT
 #!/bin/bash
-# TCA wrapper — all argument handling (directory, env=KEY) is in tca.py
-exec "$VENV_DIR/bin/python" "$TCA_DIR/tca.py" "\$@"
+# Lorne — обёртка; аргументы (каталог, env=KEY) обрабатывает tca.py
+exec "$VENV_DIR/bin/python" "$REPO_ROOT/tca.py" "\$@"
 SCRIPT
-chmod +x "$TCA_BIN"
+chmod +x "$LORNE_BIN"
+if [ -e "$VENV_DIR/bin/tca" ] || [ -L "$VENV_DIR/bin/tca" ]; then
+    rm -f "$VENV_DIR/bin/tca"
+fi
+ln -sf "lorne" "$VENV_DIR/bin/tca"
 
 INSTALL_DIR=""
 for dir in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
@@ -140,39 +145,44 @@ if [ -z "$INSTALL_DIR" ]; then
     mkdir -p "$INSTALL_DIR"
 fi
 
-SYMLINK="$INSTALL_DIR/tca"
+SYMLINK_LORNE="$INSTALL_DIR/lorne"
+SYMLINK_TCA="$INSTALL_DIR/tca"
 
-if [ -L "$SYMLINK" ] || [ -f "$SYMLINK" ]; then
-    rm -f "$SYMLINK"
-fi
+for s in "$SYMLINK_LORNE" "$SYMLINK_TCA"; do
+    if [ -L "$s" ] || [ -f "$s" ]; then
+        rm -f "$s"
+    fi
+done
 
-ln -s "$TCA_BIN" "$SYMLINK" 2>/dev/null || {
-    cp "$TCA_BIN" "$SYMLINK" 2>/dev/null || {
-        echo -e "  ${YELLOW}⚠ Не удалось создать команду в $INSTALL_DIR${RESET}"
+ln -s "$LORNE_BIN" "$SYMLINK_LORNE" 2>/dev/null && ln -s "$LORNE_BIN" "$SYMLINK_TCA" 2>/dev/null || {
+    cp "$LORNE_BIN" "$SYMLINK_LORNE" 2>/dev/null && cp "$LORNE_BIN" "$SYMLINK_TCA" 2>/dev/null || {
+        echo -e "  ${YELLOW}⚠ Не удалось создать команды в $INSTALL_DIR${RESET}"
         echo -e "  ${DIM}Добавьте вручную: export PATH=\"$VENV_DIR/bin:\$PATH\"${RESET}"
-        SYMLINK=""
+        SYMLINK_LORNE=""
+        SYMLINK_TCA=""
     }
 }
 
 # ─── Done ───────────────────────────────────────────
-_tca_progress "$TOTAL_STEPS" "$TOTAL_STEPS" "Готово"
+_install_progress "$TOTAL_STEPS" "$TOTAL_STEPS" "Готово"
 
 ELAPSED=$(_elapsed_s)
 echo ""
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}${GREEN}║  ✓ TCA установлен успешно!                  ║${RESET}"
+echo -e "${BOLD}${GREEN}║  ✓ Lorne установлен успешно!                ║${RESET}"
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
 echo -e "  ${DIM}Время установки: ${BOLD}${ELAPSED}${RESET}${DIM} с${RESET}"
 echo ""
 
-if [ -n "$SYMLINK" ]; then
-    echo -e "  Команда ${BOLD}tca${RESET} доступна!"
+if [ -n "$SYMLINK_LORNE" ]; then
+    echo -e "  Команды ${BOLD}lorne${RESET} и ${BOLD}tca${RESET} (алиас) доступны!"
     echo ""
     echo -e "  ${CYAN}Использование:${RESET}"
-    echo -e "    ${BOLD}tca${RESET}                          — запуск в текущей папке"
-    echo -e "    ${BOLD}tca /path/to/project${RESET}         — запуск в указанном проекте"
-    echo -e "    ${BOLD}tca env=sk-or-v1-...${RESET}         — запуск с API ключом"
+    echo -e "    ${BOLD}lorne${RESET}                        — запуск в текущей папке"
+    echo -e "    ${BOLD}lorne /path/to/project${RESET}       — запуск в указанном проекте"
+    echo -e "    ${BOLD}lorne env=sk-or-v1-...${RESET}       — запуск с API ключом"
+    echo -e "    ${DIM}(команда tca — то же самое)${RESET}"
     echo ""
 
     case ":$PATH:" in
@@ -185,6 +195,6 @@ if [ -n "$SYMLINK" ]; then
     esac
 else
     echo -e "  Запуск через venv:"
-    echo -e "    ${BOLD}$TCA_BIN${RESET}"
+    echo -e "    ${BOLD}$LORNE_BIN${RESET}"
     echo ""
 fi

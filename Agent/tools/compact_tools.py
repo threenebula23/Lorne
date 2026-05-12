@@ -44,9 +44,36 @@ except ImportError:
 
 
 def _plan_steps_from_json(steps_json: str) -> List[str]:
-    data = json.loads(steps_json)
+    raw = (steps_json or "").strip()
+    if not raw:
+        raise ValueError("steps_json пустой; для save передай JSON-массив строк.")
+
+    def _parse(s: str) -> Any:
+        return json.loads(s)
+
+    data: Any = None
+    try:
+        data = _parse(raw)
+    except json.JSONDecodeError:
+        try:
+            from json_repair import repair_json  # type: ignore[import-untyped]
+        except ImportError:  # pragma: no cover
+            repair_json = None  # type: ignore[misc, assignment]
+        if repair_json is not None:
+            try:
+                data = _parse(repair_json(raw))
+            except Exception:
+                data = None
+        if data is None:
+            raise ValueError(
+                "steps_json не парсится как JSON. Передай **одну** строку — валидный "
+                "JSON-массив в **двойных** кавычках, без обрыва посередине строки; "
+                "внутри шага кавычки экранируй как \\\". Пример: "
+                '["Шаг 1","Шаг 2"]. Лучше поле `steps` массивом строк (без JSON в строке).'
+            ) from None
+
     if not isinstance(data, list):
-        raise ValueError("steps_json: ожидается JSON-массив строк")
+        raise ValueError("steps_json: ожидается JSON-массив (список), например [\"a\",\"b\"].")
     return [str(x) for x in data]
 
 
@@ -59,17 +86,26 @@ def plan_tool(
     status: str = "pending",
     note: str = "",
 ) -> Dict[str, Any]:
-    """План задачи.
+    """План: save (title + steps или steps_json), load, update (step_index, status), clear.
 
-    action=save: title + steps_json (JSON-массив строк).
-    action=load: без полей. action=update: step_index, status
-    (pending|in_progress|completed|blocked), note (опц.). action=clear: очистить.
+    save: предпочти массив `steps`; иначе `steps_json` — одна строка, полный JSON `["a","b"]`.
     """
     a = (action or "").strip().lower()
     if a == "save":
         if not steps_json.strip():
             return {"ok": False, "error": "steps_json_required"}
-        steps = _plan_steps_from_json(steps_json)
+        try:
+            steps = _plan_steps_from_json(steps_json)
+        except ValueError as e:
+            return {
+                "ok": False,
+                "error": "invalid_steps_json",
+                "detail": str(e),
+                "hint": (
+                    "Используй массив `steps` в вызове тула или одну строку "
+                    '`steps_json` = \'["краткий шаг 1","шаг 2"]\' без обрыва.'
+                ),
+            }
         out = save_plan.invoke({"title": title or "План", "steps": steps})
         return {**out, "_plan_action": "save_plan"}
     if a == "load":
@@ -255,12 +291,7 @@ def library_context(
     query: str = "",
     max_tokens: int = 4000,
 ) -> Dict[str, Any]:
-    """Документация библиотек (Context7 + fallback).
-
-    action=resolve: найти по library_name. action=docs: library_id (из resolve) + query + max_tokens.
-    action=search: query (+ опц. library_name) для быстрого lookup через DDG/Context7.
-    Для общих URL — web_fetch.
-    """
+    """Context7: resolve (library_name) | docs (library_id, query) | search (query, опц. library_name)."""
     resolve_library, get_library_docs, get_documentation = _c7_invoke()
     a = (action or "").strip().lower()
     if a == "resolve":
@@ -300,7 +331,7 @@ def headless_browser(
     result_selector: str = "body",
     js_expression: str = "",
 ) -> Dict[str, Any]:
-    """Headless Chromium (Node): get_text (url, selector) | screenshot (url, output_path) | click_and_get (url, click_selector, result_selector) | evaluate (url, js_expression). wait_ms — общий."""
+    """Node Chromium: get_text|screenshot|click_and_get|evaluate; url/selector/wait_ms по схеме."""
     btext, bshot, bclick, beval = _browser_invoke()
     a = (action or "").strip().lower().replace("-", "_")
     if a == "get_text":
@@ -429,6 +460,103 @@ def reasoning_tool(
             return {"error": "path_and_query_required"}
         return analyze_code.invoke({"path": path, "query": query})
     return {"error": "bad_action", "hint": "think|diff|analyze"}
+
+
+@tool
+def project_brain_tool(
+    action: str = "refresh",
+    content: str = "",
+    write_mode: str = "append",
+    brain_rel_path: str = "",
+) -> Dict[str, Any]:
+    """Brain: refresh|reindex|scan; write_architecture; write_brain (brain_rel_path + content)."""
+    from Agent.path_utils import get_project_root
+    from Agent.project_brain import refresh_project_brain
+    from Agent.project_brain.agent_architecture import (
+        AGENT_ARCHITECTURE_FILE,
+        reindex_brain_rag,
+        write_agent_architecture,
+        write_brain_markdown,
+    )
+
+    root = get_project_root().resolve()
+    a = (action or "").strip().lower()
+
+    if a == "write_architecture":
+        if not (content or "").strip():
+            return {"ok": False, "error": "content_required", "hint": "Передай content с Markdown (компоненты, потоки, решения)."}
+        wm = (write_mode or "append").strip().lower()
+        if wm not in ("append", "replace"):
+            return {"ok": False, "error": "bad_write_mode", "hint": "append|replace"}
+        try:
+            path = write_agent_architecture(root, content, mode=wm)
+        except ValueError as e:
+            return {"ok": False, "error": str(e) or "write_failed"}
+        n = reindex_brain_rag(root)
+        rel = f"project_brain/{AGENT_ARCHITECTURE_FILE}"
+        return {
+            "ok": True,
+            "action": "written",
+            "path": str(path),
+            "file_path": rel,
+            "brain_rel_path": AGENT_ARCHITECTURE_FILE,
+            "brain_chunks_indexed": n,
+            "_brain_action": "write_architecture",
+        }
+
+    if a == "write_brain":
+        rel = (brain_rel_path or "").strip().replace("\\", "/").lstrip("/")
+        if not rel:
+            return {
+                "ok": False,
+                "error": "brain_rel_path_required",
+                "hint": (
+                    "Например agent/overview_notes.md, agent/flows_explained.md, "
+                    "glossary_supplement.md (корень brain) или architecture_notes.md."
+                ),
+            }
+        if not (content or "").strip():
+            return {"ok": False, "error": "content_required"}
+        wm = (write_mode or "append").strip().lower()
+        if wm not in ("append", "replace"):
+            return {"ok": False, "error": "bad_write_mode", "hint": "append|replace"}
+        try:
+            path = write_brain_markdown(root, rel, content, mode=wm)
+        except ValueError as e:
+            msg = str(e) or "write_failed"
+            return {
+                "ok": False,
+                "error": "write_brain_failed",
+                "detail": msg,
+                "hint": (
+                    "Нельзя писать в overview.md/architecture.md/modules/… — только "
+                    "agent/*.md, *_notes.md, *_supplement.md в корне brain, "
+                    f"или {AGENT_ARCHITECTURE_FILE}."
+                ),
+            }
+        n = reindex_brain_rag(root)
+        rel_out = f"project_brain/{rel}"
+        return {
+            "ok": True,
+            "action": "written",
+            "path": str(path),
+            "file_path": rel_out,
+            "brain_rel_path": rel,
+            "brain_chunks_indexed": n,
+            "_brain_action": "write_brain",
+        }
+
+    if a not in ("refresh", "reindex", "scan"):
+        return {
+            "error": "bad_action",
+            "hint": "refresh|reindex|scan|write_architecture|write_brain",
+        }
+
+    from Agent.rag import index_project_brain
+
+    summary = refresh_project_brain(root)
+    n = index_project_brain(str(root))
+    return {"ok": True, **summary, "brain_chunks_indexed": n}
 
 
 @tool

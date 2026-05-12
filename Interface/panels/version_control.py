@@ -99,7 +99,7 @@ class VersionControlPanel(Vertical):
                     changed.append(f)
             if changed:
                 container.mount(Static("── Git Staging ──", classes="staging-header"))
-                # IDs must be unique: paths like ".tca/x" and ".tca_x" collide if we only
+                # IDs must be unique: paths like ".lorne/x" and ".lorne_x" collide if we only
                 # replace "/" and "." → use index (path is on _file_path for handlers).
                 for i, f in enumerate(changed):
                     cat = "M"

@@ -1,6 +1,7 @@
 try:
     from .file_ops import (
         read_file, read_file_lines, list_files, edit_file, search_in_files,
+        find_in_file,
         write_file, replace_file_lines, insert_file_lines, get_file_line_count,
     )
     from .terminal_tool import run_command
@@ -37,6 +38,7 @@ try:
 except ImportError:
     from Agent.tools.file_ops import (
         read_file, read_file_lines, list_files, edit_file, search_in_files,
+        find_in_file,
         write_file, replace_file_lines, insert_file_lines, get_file_line_count,
     )
     from Agent.tools.terminal_tool import run_command
@@ -73,7 +75,7 @@ except ImportError:
 
 __all__ = [
     "read_file", "read_file_lines",
-    "list_files", "edit_file", "search_in_files", "write_file",
+    "list_files", "edit_file", "search_in_files", "find_in_file", "write_file",
     "replace_file_lines", "insert_file_lines", "get_file_line_count",
     "run_command", "download_file", "cancel_download",
     "create_pdf", "ask_user",

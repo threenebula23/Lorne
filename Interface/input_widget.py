@@ -18,8 +18,15 @@ _SKIP_DIRS: Set[str] = {
 
 _COMMANDS = [
     "/help", "/exit", "/plan", "/status", "/profile", "/model",
+    "/model <id>", "/model ollama", "/ollama pick",
     "/balance", "/credits", "/compact", "/versions", "/rollback",
+    "/mode", "/mode settings", "/normal", "/agentmode", "/askmode", "/deepmode", "/deep", "/creatormode", "/researchmode", "/brainer",
+    "/ollama status", "/ollama list", "/ollama refresh", "/ollama set-url", "/ollama set-key",
+    "/ollama add-model", "/ollama remove-model", "/ollama preset-list", "/ollama preset-set", "/ollama model-set",
+    "/deepcp list", "/deepcp rollback", "/deepcp continue", "/stop",
+    "/theme", "/accent",
     "/agent", "/custom", "/creator", "/ls", "/tree", "/rag",
+    "/creator on", "/creator off", "/creator config", "/creator set",
     "/git status", "/git log", "/git diff", "/git rollback", "/git branch",
 ]
 
@@ -87,9 +94,14 @@ def get_user_input_advanced(project_root: Optional[Path] = None) -> str:
         from prompt_toolkit.history import InMemoryHistory
         from prompt_toolkit.styles import Style
     except ImportError:
-        return input("❯ ")
+        try:
+            from Interface.ui_prefs import cli_prompt_prefix_plain
 
-    class TCACompleter(Completer):
+            return input(cli_prompt_prefix_plain())
+        except Exception:
+            return input("❯ ")
+
+    class LorneCompleter(Completer):
         def get_completions(self, document, complete_event):
             text = document.text_before_cursor
             word = document.get_word_before_cursor(WORD=True)
@@ -138,7 +150,7 @@ def get_user_input_advanced(project_root: Optional[Path] = None) -> str:
         history.append_string(h)
 
     session = PromptSession(
-        completer=TCACompleter(),
+        completer=LorneCompleter(),
         style=style,
         history=history,
         complete_while_typing=False,
@@ -146,7 +158,10 @@ def get_user_input_advanced(project_root: Optional[Path] = None) -> str:
     )
 
     try:
-        result = session.prompt([("class:prompt", "❯ ")])
+        from Interface.ui_prefs import cli_prompt_prefix_plain
+
+        prompt_txt = cli_prompt_prefix_plain()
+        result = session.prompt([("class:prompt", prompt_txt)])
         add_to_history(result)
         return result
     except (KeyboardInterrupt, EOFError):

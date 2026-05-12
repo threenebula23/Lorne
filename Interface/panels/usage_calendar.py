@@ -14,9 +14,10 @@ stored, and attribute that delta to today. Missing days stay blank.
 from __future__ import annotations
 
 import json
+import math
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from rich.text import Text
 
@@ -36,10 +37,19 @@ _GREEN_SHADES: Tuple[str, ...] = (
 
 _DIM = "#6B7280"
 _FG_MAIN = "#E5E7EB"
-_LOG_FILE = Path(".tca/openrouter_usage.json")
+
+
+def _log_file() -> Path:
+    from Agent.runtime_paths import project_data_dir
+
+    return project_data_dir() / "openrouter_usage.json"
 
 # How many weeks of history to render. 52 ≈ one year.
 _WEEKS = 52
+# Glyphs: empty days must not use the same "full block" as activity — in many
+# terminals a dark #hex cell looks identical to the brightest green.
+_CELL_EMPTY = "· "  # 2 cell columns, visually distinct (no bar fill)
+_CELL_FULL = "██"
 
 
 def _accent_color() -> str:
@@ -58,9 +68,10 @@ def _accent_color() -> str:
 
 def _load_log() -> Dict[str, float]:
     try:
-        if not _LOG_FILE.exists():
+        lf = _log_file()
+        if not lf.exists():
             return {}
-        raw = json.loads(_LOG_FILE.read_text(encoding="utf-8") or "{}")
+        raw = json.loads(lf.read_text(encoding="utf-8") or "{}")
     except Exception:
         return {}
     if not isinstance(raw, dict):
@@ -76,8 +87,9 @@ def _load_log() -> Dict[str, float]:
 
 def _save_log(data: Dict[str, float]) -> None:
     try:
-        _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _LOG_FILE.write_text(
+        lf = _log_file()
+        lf.parent.mkdir(parents=True, exist_ok=True)
+        lf.write_text(
             json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
@@ -123,17 +135,38 @@ def total_usage() -> float:
 # ── rendering ────────────────────────────────────────────────────────
 
 
-def _shade_for(value: float, vmax: float) -> str:
+def _intensity(value: float, vmax: float) -> float:
+    """0..1 for shading; log curve so a single huge day does not drown the rest."""
     if value <= 0 or vmax <= 0:
+        return 0.0
+    # log(1+k*x) spreads values when one day dominates
+    k = 80.0
+    return min(1.0, math.log(1.0 + k * value) / max(1e-9, math.log(1.0 + k * vmax)))
+
+
+def _shade_for_intensity(t: float) -> str:
+    if t <= 0:
         return _EMPTY
-    ratio = min(1.0, value / vmax)
-    if ratio < 0.25:
+    if t < 0.25:
         return _GREEN_SHADES[0]
-    if ratio < 0.5:
+    if t < 0.5:
         return _GREEN_SHADES[1]
-    if ratio < 0.75:
+    if t < 0.75:
         return _GREEN_SHADES[2]
     return _GREEN_SHADES[3]
+
+
+def _scale_max_from_dailies(data: Dict[str, float]) -> float:
+    """Max of per-day $ (excludes __cumulative_total__)."""
+    m = 0.0
+    for k, v in data.items():
+        if k == "__cumulative_total__":
+            continue
+        try:
+            m = max(m, float(v))
+        except Exception:
+            continue
+    return m
 
 
 def _iter_calendar_dates(weeks: int = _WEEKS) -> List[List[Optional[date]]]:
@@ -243,21 +276,15 @@ class UsageCalendar(Vertical):
 
     def _render_grid(self) -> Text:
         data = _load_log()
-        vmax = 0.0
-        for k, v in data.items():
-            if k == "__cumulative_total__":
-                continue
-            try:
-                vmax = max(vmax, float(v))
-            except Exception:
-                continue
+        vmax = _scale_max_from_dailies(data)
 
         grid = _iter_calendar_dates()
         # Render row-by-row so the output shape stays stable on narrow terminals.
-        # Each cell is 2 columns wide.
+        # Each day is 2 terminal columns: «·» for $0, «██»+colour for $>0.
         months_row = self._render_months_row(grid)
         rows: List[Text] = []
-        weekday_labels = ("M", " ", "W", " ", "F", " ", " ")
+        # Пн..Вс — одна буква, чтобы сетка оставалась компактной
+        weekday_labels = ("П", "В", "С", "Ч", "П", "С", "В")
         for r in range(7):
             line = Text()
             line.append(f"{weekday_labels[r]} ", style=_DIM)
@@ -267,10 +294,12 @@ class UsageCalendar(Vertical):
                     line.append("  ", style="")
                     continue
                 v = float(data.get(d.isoformat(), 0.0) or 0.0)
-                shade = _shade_for(v, vmax)
-                # Use a filled square; background gives the colour,
-                # a matching foreground keeps the glyph invisible.
-                line.append("██", style=shade)
+                if v <= 0 or vmax <= 0:
+                    line.append(_CELL_EMPTY, style=_DIM)
+                    continue
+                t_int = _intensity(v, vmax)
+                shade = _shade_for_intensity(t_int)
+                line.append(_CELL_FULL, style=shade)
             rows.append(line)
 
         out = Text()
@@ -283,35 +312,105 @@ class UsageCalendar(Vertical):
         return out
 
     def _render_months_row(self, grid: List[List[Optional[date]]]) -> Text:
-        """Produce a row of month labels aligned with week columns.
-
-        We pick the first Monday-of-month visible in each column and drop a
-        two-letter Russian abbreviation there. Other columns get blank spaces
-        so everything stays column-aligned.
-        """
-        ru_short = (
-            "Я", "Ф", "М", "А", "М", "И", "И", "А", "С", "О", "Н", "Д",
-        )
-        seen_months: Dict[int, int] = {}
-        labels: List[str] = ["  " for _ in grid]
-        for ci, col in enumerate(grid):
-            first = next((d for d in col if d is not None), None)
-            if first is None:
-                continue
-            if first.day <= 7 and first.month not in seen_months:
-                seen_months[first.month] = ci
-                labels[ci] = f"{ru_short[first.month - 1]} "
-        out = Text()
-        out.append("  ", style=_DIM)  # weekday gutter
-        for lbl in labels:
-            out.append(lbl, style=_DIM)
-        return out
+        """Метка в колонке, где в эту неделю попадает 1-е число (01..12), 2 знака = ширина клетки."""
+        return _format_months_row_for_grid(grid, _DIM)
 
     def _render_legend(self) -> Text:
         t = Text()
         t.append("Меньше ", style=_DIM)
-        t.append("██", style=_EMPTY)
+        t.append(_CELL_EMPTY, style=_DIM)
+        t.append(" ", style=_DIM)
         for shade in _GREEN_SHADES:
             t.append("██", style=shade)
         t.append(" Больше", style=_DIM)
         return t
+
+
+def _format_months_row_for_grid(
+    grid: List[List[Optional[date]]],
+    dim_style: str,
+) -> Text:
+    """Строка месяцев: «01»..«12» в колонке недели, где есть 1-е число (2 символа = ширина дня)."""
+    labels: List[str] = ["  " for _ in grid]
+    seen_ym: Set[Tuple[int, int]] = set()
+    for _ci, col in enumerate(grid):
+        d1 = next((d for d in col if d is not None and d.day == 1), None)
+        if d1 is not None:
+            key = (d1.year, d1.month)
+            if key not in seen_ym:
+                seen_ym.add(key)
+                labels[_ci] = f"{d1.month:02d}"
+    out = Text()
+    out.append("  ", style=dim_style)
+    for lbl in labels:
+        out.append(lbl, style=dim_style)
+    return out
+
+
+def render_cli_usage_calendar_text() -> Text:
+    """Календарь расходов OpenRouter для Rich Panel в CLI (те же данные, что в TUI)."""
+    try:
+        from Interface.visualization import _cli_p
+
+        pal = _cli_p()
+        dim = pal.get("fg2", _DIM)
+        acc = pal.get("accent", "#8B5CF6")
+    except Exception:
+        dim = _DIM
+        acc = "#8B5CF6"
+
+    data = _load_log()
+    total = float(data.get("__cumulative_total__", 0.0) or 0.0)
+    window_sum = sum(
+        float(v) for k, v in data.items() if k != "__cumulative_total__"
+    )
+    usd_total = max(total, window_sum)
+
+    vmax = _scale_max_from_dailies(data)
+    n_days_charged = sum(
+        1 for k, v in data.items()
+        if k != "__cumulative_total__" and (float(v) if v else 0) > 0
+    )
+
+    out = Text()
+    out.append("Расход OpenRouter (календарь по дням)\n", style=dim)
+    out.append(f"${usd_total:,.4f}", style=f"bold {acc}")
+    out.append("   накоплено (API / локальный лог)\n", style=dim)
+    if n_days_charged <= 1 and usd_total > 0:
+        out.append(
+            "Один снимок: весь накопит. расход в один день; по дням — после регулярных "
+            "проверок /balance (дельта в день). «·» = $0 в этот день.\n",
+            style=dim,
+        )
+    out.append("\n", style=dim)
+
+    grid = _iter_calendar_dates()
+    out.append(_format_months_row_for_grid(grid, dim))
+    out.append("\n")
+    weekday_labels = ("П", "В", "С", "Ч", "П", "С", "В")
+    for r in range(7):
+        line = Text()
+        line.append(f"{weekday_labels[r]} ", style=dim)
+        for col in grid:
+            d = col[r]
+            if d is None:
+                line.append("  ", style="")
+                continue
+            v = float(data.get(d.isoformat(), 0.0) or 0.0)
+            if v <= 0 or vmax <= 0:
+                line.append(_CELL_EMPTY, style=dim)
+                continue
+            t_int = _intensity(v, vmax)
+            shade = _shade_for_intensity(t_int)
+            line.append(_CELL_FULL, style=shade)
+        out.append(line)
+        if r < 6:
+            out.append("\n")
+    out.append("\n")
+    out.append("Меньше ", style=dim)
+    out.append(_CELL_EMPTY, style=dim)
+    out.append(" ", style=dim)
+    for shade in _GREEN_SHADES:
+        out.append("██", style=shade)
+    out.append(" Больше", style=dim)
+    return out

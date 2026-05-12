@@ -16,19 +16,29 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, DirectoryTree, Input, Label, Static
 
+from Agent.runtime_paths import recent_projects_json_path
+from Interface.branding import APP_DISPLAY_NAME, APP_FULL_VERSION_LABEL
 from Interface.ui_prefs import load_prefs
 
 Point = Tuple[float, float, float]
-RECENTS_PATH = Path.home() / ".tca_recent_projects.json"
+RECENTS_PATH = recent_projects_json_path()
 MAX_RECENTS = 5
 
 
-def _build_tca_logo() -> Text:
+def _build_logo_block() -> Text:
+    """Текстовый логотип стартового экрана (figlet), градиент в фирменных фиолетовых."""
     try:
         from pyfiglet import figlet_format
-        raw = figlet_format("TCA", font="colossal").rstrip("\n")
+        raw = figlet_format(APP_DISPLAY_NAME, font="colossal").rstrip("\n")
     except Exception:
-        raw = "████████╗ ██████╗ █████╗\n╚══██╔══╝██╔════╝██╔══██╗\n   ██║   ██║     ███████║"
+        raw = (
+            "██╗     ██████╗ ██████╗ ███╗   ██╗███████╗\n"
+            "██║    ██╔═══██╗██╔══██╗████╗  ██║██╔════╝\n"
+            "██║    ██║   ██║██████╔╝██╔██╗ ██║█████╗  \n"
+            "██║    ██║   ██║██╔══██╗██║╚██╗██║██╔══╝  \n"
+            "███████╗╚██████╔╝██║  ██║██║ ╚████║███████╗\n"
+            "╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝"
+        )
 
     colors = [
         "#2a0040",
@@ -85,7 +95,7 @@ def save_recent_project(path: Path) -> None:
 
 
 class LorenzWidget(Widget):
-    """Purple-only Lorenz attractor."""
+    """Анимированный странный аттрактор (фиолетовая палитра), фон слева на стартовом экране."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -336,8 +346,14 @@ class StartScreenApp(App[Optional[Path]]):
     Screen { layout: horizontal; }
     #left-pane { width: 1fr; height: 100%; border-right: solid #00000000; }
     #right-pane { width: 1fr; height: 100%; padding: 1 2; }
-    #logo {
+    #logo-header {
         width: 100%;
+        height: auto;
+        layout: horizontal;
+        align: center bottom;
+    }
+    #logo {
+        width: 1fr;
         height: auto;
         margin: 0 0 1 0;
         text-style: bold;
@@ -345,6 +361,12 @@ class StartScreenApp(App[Optional[Path]]):
         text-align: center;
         background: transparent;
         border: none;
+    }
+    #app-version-badge {
+        color: #64748b;
+        text-style: none;
+        margin: 0 0 2 1;
+        height: auto;
     }
     #buttons { height: auto; }
     #buttons Button { width: 100%; margin: 0 0 1 0; }
@@ -381,7 +403,9 @@ class StartScreenApp(App[Optional[Path]]):
             with Vertical(id="left-pane"):
                 yield LorenzWidget(id="lorenz")
             with Vertical(id="right-pane"):
-                yield Static(Align.center(_build_tca_logo()), id="logo")
+                with Horizontal(id="logo-header"):
+                    yield Static(Align.center(_build_logo_block()), id="logo")
+                    yield Label(APP_FULL_VERSION_LABEL, id="app-version-badge")
                 with Vertical(id="buttons"):
                     yield Button("Открыть проект", id="btn-open-project")
                     yield Button("Открыть с текущей директории", id="btn-open-current")
@@ -409,11 +433,13 @@ class StartScreenApp(App[Optional[Path]]):
             muted = "#94a3b8"
         self.screen.styles.background = bg
         self.screen.styles.color = fg
-        for selector in ("#logo", "#recent-title"):
+        for selector, widget_cls, color in (
+            ("#logo", Static, fg),
+            ("#app-version-badge", Label, "#64748b"),
+            ("#recent-title", Label, muted),
+        ):
             try:
-                self.query_one(selector, Static if selector == "#logo" else Label).styles.color = (
-                    fg if selector == "#logo" else muted
-                )
+                self.query_one(selector, widget_cls).styles.color = color
             except Exception:
                 pass
         try:
@@ -450,9 +476,9 @@ class StartScreenApp(App[Optional[Path]]):
         self.exit(None)
 
     def _tick(self) -> None:
+        """Периодически обновляет аттрактор слева (шаг симуляции перед перерисовкой)."""
         lorenz = self.query_one("#lorenz", LorenzWidget)
         if not lorenz.paused:
-            # Generate more simulation points before each screen refresh.
             lorenz.advance(24)
             lorenz.refresh()
 

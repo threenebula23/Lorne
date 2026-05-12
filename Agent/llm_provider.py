@@ -1,6 +1,6 @@
 """
-LLM Provider for TCA — manages model profiles, config persistence, and OpenRouter API.
-Includes provider capability detection to avoid incompatible API parameters.
+Провайдер LLM для Lorne: профили, сохранение конфигурации, OpenRouter.
+Включая определение возможностей провайдера для совместимых параметров API.
 """
 import json
 import os
@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_openai import ChatOpenAI
 
+from Agent.runtime_paths import env_pref, project_data_dir, user_config_json_path
+
 try:  # Preferred native client for Ollama — forwards all options to /api/chat.
     from langchain_ollama import ChatOllama  # type: ignore
 
@@ -21,8 +23,6 @@ except Exception:  # pragma: no cover — package is optional at runtime.
     _HAS_CHAT_OLLAMA = False
 
 ProfileName = str
-
-_CONFIG_PATH = Path.home() / ".tca_config.json"
 
 # ─── Provider capabilities ──────────────────────────────────────────
 # Maps provider prefix → supported features.
@@ -153,8 +153,8 @@ def _ensure_native_base_url(url: str) -> str:
 
 
 def _load_ui_model_overrides() -> Dict[str, Any]:
-    """Read dynamic model settings from project .tca/ui_settings.json."""
-    p = Path.cwd() / ".tca" / "ui_settings.json"
+    """Читает переопределения моделей из ``<project>/.lorne/ui_settings.json`` (или legacy ``.tca``)."""
+    p = project_data_dir() / "ui_settings.json"
     if not p.exists():
         return {}
     try:
@@ -229,8 +229,9 @@ def _env(name: str, default: str | None = None) -> str:
 
 def load_config() -> Dict[str, Any]:
     try:
-        if _CONFIG_PATH.exists():
-            return json.loads(_CONFIG_PATH.read_text("utf-8"))
+        p = user_config_json_path()
+        if p.exists():
+            return json.loads(p.read_text("utf-8"))
     except Exception:
         pass
     return {}
@@ -240,7 +241,7 @@ def save_config(cfg: Dict[str, Any]) -> None:
     try:
         existing = load_config()
         existing.update(cfg)
-        _CONFIG_PATH.write_text(json.dumps(existing, indent=2, ensure_ascii=False), "utf-8")
+        user_config_json_path().write_text(json.dumps(existing, indent=2, ensure_ascii=False), "utf-8")
     except Exception:
         pass
 
@@ -257,7 +258,7 @@ def save_model_choice(model_id: str) -> None:
 
 def _resolve_default_model() -> str:
     """Priority: env var > saved config > hardcoded default."""
-    env_model = _env("TCA_MODEL")
+    env_model = env_pref("MODEL")
     if env_model:
         return env_model
     saved = get_saved_model()
@@ -270,19 +271,19 @@ def _build_profiles() -> Dict[ProfileName, Dict[str, object]]:
     base_model = _resolve_default_model()
     return {
         "fast": {
-            "model": _env("TCA_MODEL_FAST", base_model),
-            "temperature": float(_env("TCA_TEMP_FAST", "0.1")),
-            "max_tokens": int(_env("TCA_MAX_TOKENS_FAST", _env("TCA_MAX_TOKENS", "4096"))),
+            "model": env_pref("MODEL_FAST", base_model),
+            "temperature": float(env_pref("TEMP_FAST", "0.1")),
+            "max_tokens": int(env_pref("MAX_TOKENS_FAST", env_pref("MAX_TOKENS", "4096"))),
         },
         "balanced": {
-            "model": _env("TCA_MODEL_BALANCED", base_model),
-            "temperature": float(_env("TCA_TEMP_BALANCED", "0.2")),
-            "max_tokens": int(_env("TCA_MAX_TOKENS_BALANCED", _env("TCA_MAX_TOKENS", "8192"))),
+            "model": env_pref("MODEL_BALANCED", base_model),
+            "temperature": float(env_pref("TEMP_BALANCED", "0.2")),
+            "max_tokens": int(env_pref("MAX_TOKENS_BALANCED", env_pref("MAX_TOKENS", "8192"))),
         },
         "quality": {
-            "model": _env("TCA_MODEL_QUALITY", base_model),
-            "temperature": float(_env("TCA_TEMP_QUALITY", "0.1")),
-            "max_tokens": int(_env("TCA_MAX_TOKENS_QUALITY", _env("TCA_MAX_TOKENS", "16384"))),
+            "model": env_pref("MODEL_QUALITY", base_model),
+            "temperature": float(env_pref("TEMP_QUALITY", "0.1")),
+            "max_tokens": int(env_pref("MAX_TOKENS_QUALITY", env_pref("MAX_TOKENS", "16384"))),
         },
     }
 
@@ -302,7 +303,7 @@ def get_available_profiles() -> Dict[ProfileName, Dict[str, object]]:
 
 def normalize_profile(name: str | None) -> ProfileName:
     if not name:
-        env_profile = _env("TCA_PROFILE", "balanced").lower()
+        env_profile = env_pref("PROFILE", "balanced").lower()
         name = env_profile or "balanced"
     name = name.lower().strip()
     if name in _PROFILES:
@@ -458,7 +459,7 @@ def get_llm(profile: str | None = None) -> Tuple[Any, ProfileName, str]:
             llm = _build_ollama_openai_llm(wire_model_name, settings)
         return llm, profile_name, model_name
 
-    base_url = _env("TCA_BASE_URL", "https://openrouter.ai/api/v1")
+    base_url = env_pref("BASE_URL", "https://openrouter.ai/api/v1")
     api_key = _env("OPENROUTER_API_KEY", "")
     llm = ChatOpenAI(
         base_url=base_url,
@@ -474,9 +475,14 @@ def get_llm(profile: str | None = None) -> Tuple[Any, ProfileName, str]:
 
 def set_model(model_id: str) -> str:
     """Set model, persist, and rebuild profiles. Returns the model_id."""
-    save_model_choice(model_id)
+    mid = (model_id or "").strip()
+    if not mid:
+        raise ValueError("пустой id модели")
+    if mid in ("/exit", "/quit", "exit", "quit"):
+        raise ValueError("некорректный id модели (похоже на команду выхода, а не на модель).")
+    save_model_choice(mid)
     reload_profiles()
-    return model_id
+    return mid
 
 
 # ─── OpenRouter API ────────────────────────────────────────────────

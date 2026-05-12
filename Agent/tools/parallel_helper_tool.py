@@ -17,13 +17,7 @@ def start_background_task(
     task: str,
     max_tool_rounds: int = 12,
 ) -> Dict[str, Any]:
-    """Запусти краткого **параллельного помощника** (отдельный LLM+инструменты в фоне).
-
-    Используй, если основной поток скоро займёт `run_command` (сервер, долгий тест,
-    сборка) и **параллельно** нужно: smoke-тест, `curl` к `localhost`, лёгкий `pytest`.
-
-    Возвращает `job_id`. Затем `get_background_result(job_id, wait_seconds=...)`.
-    """
+    """Фоновый микро-цикл LLM+тулы; вернёт job_id → get_background_result (параллельно с долгим run_command)."""
     try:
         from Agent.tool_registry import build_tools, build_tool_map, bind_tools_safe, set_tool_session_prefs
         from Agent.llm_provider import get_llm
@@ -40,8 +34,8 @@ def start_background_task(
     except Exception:
         am, pw, bw = False, False, True
 
-    set_tool_session_prefs(agent_mode=am, playwright_python=pw, browser_tools=bw)
-    tools, _ = build_tools(agent_mode=am, playwright_python=pw, browser_tools=bw)
+    set_tool_session_prefs(agent_mode=am, ask_mode=False, playwright_python=pw, browser_tools=bw)
+    tools, _ = build_tools(agent_mode=am, ask_mode=False, playwright_python=pw, browser_tools=bw)
     tmap = build_tool_map(tools)
     llm, _profile, mname = get_llm("fast")
 

@@ -108,13 +108,15 @@ def _make_worker_panel_rich(w: WorkerInfo) -> Panel:
     """Создать Rich Panel для одного воркера."""
     icon, color = _STATUS_ICONS.get(w.status, ("●", "white"))
 
-    # Заголовок
-    model_tag = "[LOCAL]" if w.model_type == "local" else "[HEAVY]"
+    # Заголовок (Text + styles, не сырой markup — иначе видно «[magenta][HEAVY]»).
+    model_tag = "LOCAL" if w.model_type == "local" else "HEAVY"
     model_color = "cyan" if w.model_type == "local" else "magenta"
-
     title = Text()
-    title.append(f" {w.worker_id} ", style="bold")
-    title.append(f"[{model_color}]{model_tag}[/{model_color}]")
+    title.append(" ", style="")
+    title.append(f"{w.worker_id} ", style="bold")
+    title.append("[", style="dim")
+    title.append(model_tag, style=f"bold {model_color}")
+    title.append("]", style="dim")
 
     # Тело
     lines: list[str] = []
@@ -269,6 +271,21 @@ def _build_graph_ascii(
     return "\n".join(lines)
 
 
+def _worker_fingerprint(w: WorkerInfo) -> tuple:
+    """Стабильная подпись воркера без «тикающих» полей (elapsed)."""
+    return (
+        w.worker_id,
+        w.status,
+        w.task,
+        w.model_name,
+        w.model_type,
+        w.tool_calls,
+        w.rounds,
+        w.current_action,
+        w.result_preview,
+    )
+
+
 class GraphLiveDisplay:
     """Менеджер real-time отображения графа агентов через Rich Live."""
 
@@ -278,6 +295,7 @@ class GraphLiveDisplay:
         self.phase = "planning"
         self._live: Optional[Any] = None
         self._console: Optional[Any] = None
+        self._last_sig: Any = None
 
     def start(self) -> None:
         """Начать live-отображение."""
@@ -289,19 +307,30 @@ class GraphLiveDisplay:
             self._live = Live(
                 renderable,
                 console=self._console,
+                auto_refresh=False,
                 refresh_per_second=2,
                 transient=False,
             )
-            self._live.start()
+            self._live.start(refresh=True)
             _active_live = self._live
         else:
             print(_build_graph_ascii(self.workers, self.main_task, self.phase))
 
     def update(self) -> None:
-        """Обновить отображение."""
+        """Обновить отображение (только при смене данных воркеров, без таймера)."""
         if self._live and HAS_RICH:
-            renderable = build_graph_renderable(self.workers, self.main_task, self.phase)
-            self._live.update(renderable)
+            sig = (
+                self.phase,
+                self.main_task,
+                tuple(_worker_fingerprint(w) for w in self.workers),
+            )
+            if sig == self._last_sig:
+                return
+            self._last_sig = sig
+            renderable = build_graph_renderable(
+                self.workers, self.main_task, self.phase,
+            )
+            self._live.update(renderable, refresh=True)
         elif not HAS_RICH:
             # ANSI: очистить и перерисовать
             import sys

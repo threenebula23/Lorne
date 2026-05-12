@@ -1,4 +1,4 @@
-"""TCA IDE — чат-центричный TUI: файлы слева сверху, агенты слева снизу, вкладки по центру."""
+"""IDE Lorne (Textual): чат по центру, файлы и агенты слева, вкладки рабочей области."""
 from __future__ import annotations
 
 import shlex
@@ -15,6 +15,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Header, Static, Button, TextArea, Select, Checkbox
 
+from Interface.branding import APP_DISPLAY_NAME, APP_FULL_VERSION_LABEL
 from Interface.ui_prefs import load_prefs
 from Interface.themes import apply_theme
 
@@ -33,11 +34,11 @@ from .panels.ai_chat import (
 from .session_picker_screen import SessionPickerScreen
 
 
-class TCAApp(App):
-    """TCA full-screen IDE application."""
+class LorneApp(App):
+    """Полноэкранное приложение IDE (Textual)."""
 
     CSS_PATH = "tui_app.tcss"
-    TITLE = "TCA — Terminal Coding Assistant"
+    TITLE = f"{APP_DISPLAY_NAME} — Terminal coding assistant · {APP_FULL_VERSION_LABEL}"
     LAYERS = ["base", "overlay"]
 
     BINDINGS = [
@@ -83,7 +84,7 @@ class TCAApp(App):
         self._require_session_picker = require_session_picker
         self._bridge = None
         self._left_width = 28
-        self._mode_name = "normal"
+        self._mode_name = "agent"
         self._shutdown_done = False
 
     def on_mount(self) -> None:
@@ -373,7 +374,7 @@ class TCAApp(App):
 
     @on(ModeToggled)
     def on_mode_toggled(self, event: ModeToggled) -> None:
-        self._mode_name = str(event.mode or "normal")
+        self._mode_name = str(event.mode or "agent")
         self._update_status()
         if self._on_mode_toggle:
             self._on_mode_toggle(event.mode)
@@ -521,3 +522,5 @@ class TCAApp(App):
 
     def _update_status(self) -> None:
         self.update_status(model=self._model_name, branch=self._branch)
+
+

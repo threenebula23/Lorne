@@ -1,4 +1,4 @@
-"""Center workspace — permanent Chat tab + closable file / image tabs."""
+"""Центральная рабочая область: вкладка чата и закрываемые вкладки файлов и изображений."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,6 +30,10 @@ class SettingsWorkspacePane(Vertical):
     DEFAULT_CSS = """
     SettingsWorkspacePane {
         height: 1fr;
+    }
+    SettingsWorkspacePane .settings-ws-scroll {
+        height: 1fr;
+        min-height: 1;
     }
     #settings-ws-toolbar {
         dock: top;
@@ -65,7 +69,7 @@ class SettingsWorkspacePane(Vertical):
         with Horizontal(id="settings-ws-toolbar"):
             yield Static(title)
             yield Button("Закрыть вкладку", id=self._close_btn_id, variant="error")
-        yield VerticalScroll(id=self._scroll_id)
+        yield VerticalScroll(id=self._scroll_id, classes="settings-ws-scroll")
 
     def on_mount(self) -> None:
         try:

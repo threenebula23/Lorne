@@ -1,11 +1,11 @@
 """
-Cross-platform command execution for TCA.
+Cross-platform command execution for Lorne.
 Supports Windows (cmd.exe) and Unix (sh) with proper timeout and output handling.
 """
 import sys
 import subprocess
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 IS_WINDOWS = sys.platform == "win32"
 DEFAULT_SHELL = "cmd.exe" if IS_WINDOWS else "/bin/sh"
@@ -82,3 +82,70 @@ def run_command_safe(
             "returncode": -1,
             "error": type(e).__name__,
         }
+
+
+def run_command_detached(
+    command: str,
+    cwd: Optional[str] = None,
+    log_name: str = "background_cmd.log",
+) -> Dict[str, Any]:
+    """Start command in background; append stdout/stderr to каталог данных проекта (``.lorne`` / legacy ``.tca``) / ``<log_name>``.
+
+    Use for long-running dev servers (``npm run dev``) so the agent is not blocked.
+    """
+    cwd_path = Path(cwd).resolve() if cwd else None
+    try:
+        from Agent.path_utils import get_project_root
+        from Agent.runtime_paths import project_data_dir
+
+        log_dir = project_data_dir(get_project_root())
+    except Exception:
+        from Agent.runtime_paths import project_data_dir
+
+        log_dir = project_data_dir()
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    log_path = log_dir / log_name
+
+    cwd_s = str(cwd_path) if cwd_path else None
+    try:
+        with open(log_path, "a", encoding="utf-8", errors="replace") as logf:
+            logf.write(f"\n\n=== background: {command!r} cwd={cwd_s or 'default'} ===\n")
+            logf.flush()
+            if IS_WINDOWS:
+                proc = subprocess.Popen(
+                    [DEFAULT_SHELL, SHELL_FLAG, command],
+                    cwd=cwd_s,
+                    stdout=logf,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                )
+            else:
+                proc = subprocess.Popen(
+                    command,
+                    shell=True,
+                    executable=DEFAULT_SHELL,
+                    cwd=cwd_s,
+                    stdout=logf,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+    except Exception as e:
+        return {
+            "stdout": "",
+            "stderr": str(e),
+            "returncode": -1,
+            "error": type(e).__name__,
+            "background": False,
+        }
+    return {
+        "stdout": f"Процесс запущен в фоне (pid={proc.pid}). Лог: {log_path}",
+        "stderr": "",
+        "returncode": 0,
+        "background": True,
+        "pid": proc.pid,
+        "log_path": str(log_path),
+    }

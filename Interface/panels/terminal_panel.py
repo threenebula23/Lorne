@@ -41,7 +41,7 @@ class _FallbackTerminal(Vertical):
     def on_mount(self) -> None:
         try:
             out = self.query_one(f"#term-out-{self._tab_id}", RichLog)
-            out.write(f"[#6B7280]TCA Terminal (type commands below)[/]")
+            out.write(f"[#6B7280]Lorne Terminal (type commands below)[/]")
             out.write(f"[#6B7280]cwd: {Path.cwd()}[/]")
         except Exception:
             pass

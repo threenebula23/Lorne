@@ -122,12 +122,6 @@ class CreatorProgressBlock(Vertical):
             self._timer = self.set_interval(self.TICK_INTERVAL, self._tick)
         except Exception:
             self._timer = None
-        # Refresh status once per second so the elapsed-time counter moves
-        # even when the orchestrator isn't pushing new percent updates.
-        try:
-            self.set_interval(1.0, self._refresh_status)
-        except Exception:
-            pass
 
     def on_resize(self, event) -> None:  # type: ignore[override]
         self._resize_to_parent()
@@ -309,6 +303,8 @@ class CreatorProgressBlock(Vertical):
                     self._active_cells[idx] = self._active_cells[-1]
                     self._active_cells.pop()
             self._refresh_grid()
+
+        self._refresh_status()
 
         if self._finished and self._current_stages >= self._total_stages:
             if self._timer is not None:

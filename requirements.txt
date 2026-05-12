@@ -1,4 +1,4 @@
-# TCA — Terminal Coding Assistant
+# Lorne — terminal agent IDE (Python stack below is shared with the repo layout).
 # Core agent dependencies
 python-dotenv>=1.0.0
 json-repair>=0.7.0
@@ -15,6 +15,8 @@ rich>=13.0.0
 textual[syntax]>=1.0.0
 # Advanced input with autocomplete and history
 prompt_toolkit>=3.0.0
+# Interactive lists (session picker)
+questionary>=2.0.0
 # ASCII charts in terminal
 plotext>=5.0.0
 # Terminal animations and effects
@@ -30,8 +32,9 @@ gitpython>=3.1.0
 reportlab>=4.0.0
 # ASCII art for splash screen
 pyfiglet>=0.8.0
-# Image support for TCA
+# Image support for splash / viewers
 pillow>=10.0.0
+# Optional: Relator templates for project_brain (pip install relator)
 # OCR (needs system `tesseract` in PATH; optional `tesseract-langpack-rus` for Russian)
 pytesseract>=0.3.10
 # PDF text layer extraction for ocr_read_file_soft (no OCR raster)

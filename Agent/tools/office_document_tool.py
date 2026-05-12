@@ -505,16 +505,7 @@ def _apply_one_docx_op(doc: Any, op: Dict[str, Any]) -> None:
 
 @tool
 def docx_document_advanced_ops(file_path: str, operations_json: str) -> Dict[str, Any]:
-    """Глубокая вёрстка .docx: абзацы, runs, секции, таблицы, разрывы.
-
-    operations_json — JSON-массив объектов `{"op": "...", ...}`. Поддерживаемые op:
-    append_paragraph, set_paragraph_alignment, set_paragraph_spacing,
-    set_paragraph_indent, set_run_font, set_section_margins,
-    set_section_orientation, set_section_page_size_cm,
-    insert_page_break_after_paragraph, insert_table_after_paragraph.
-    До 40 операций за вызов. Точный набор полей см. в ответе на ошибку валидации.
-    Поля PAGE, TOC, сноски — только через code_interpreter + python-docx/lxml.
-    """
+    """Массив op в operations_json (до 40): append_paragraph, set_paragraph_*, set_run_font, set_section_*, insert_page_break_after_paragraph, insert_table_after_paragraph. Детали полей — из ответа валидации; TOC/PAGE — через code_interpreter."""
     try:
         from docx import Document
     except ImportError:
@@ -556,9 +547,7 @@ def docx_document_advanced_ops(file_path: str, operations_json: str) -> Dict[str
 
 @tool
 def pdf_styled_document_create(file_path: str, sections_json: str, title: str = "") -> Dict[str, Any]:
-    """Создаёт PDF с «логическими» стилями (заголовки и body через ReportLab). Перезаписывает файл.
-    sections_json: [{"role":"title|h1|h2|body","text":"..."}, ...]
-    role задаёт размер/начертание как у заголовков в Word (упрощённо)."""
+    """PDF через ReportLab; sections_json: [{role: title|h1|h2|body, text}, ...]; перезапись файла."""
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet

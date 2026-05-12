@@ -1,14 +1,14 @@
 @echo off
-REM TCA - Terminal Coding Assistant - Ustanovka (Windows)
-REM  1. Virtualnoe okruzhenie
-REM  2. Zavisimosti (pip pokazhet sobstvennyy progress)
-REM  3. Komanda tca v %%LOCALAPPDATA%%\TCA + PATH
+REM Lorne v0.98 — установка (Windows)
+REM  1. Виртуальное окружение
+REM  2. Зависимости (pip покажет собственный прогресс)
+REM  3. Команды lorne и tca (алиас) в %%LOCALAPPDATA%%\Lorne + PATH
 
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
-set "TCA_DIR=%~dp0"
-set "TCA_DIR=%TCA_DIR:~0,-1%"
+set "REPO_ROOT=%~dp0"
+set "REPO_ROOT=%REPO_ROOT:~0,-1%"
 
 for /f %%t in ('powershell -NoProfile -Command "[int64]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"') do set "T_BUILD_START=%%t"
 set "TOTAL_STEPS=6"
@@ -16,7 +16,7 @@ set "CUR_STEP=0"
 
 echo.
 echo [========================================]
-echo   TCA - Ustanovka Terminal Coding Assistant
+echo   Lorne v0.98 — установка
 echo [========================================]
 echo.
 
@@ -83,7 +83,7 @@ if !PY_MAJOR! equ 3 if !PY_MINOR! lss 10 (
 )
 call :show_progress "Proverka Python: %PYVER%"
 
-set "VENV_DIR=%TCA_DIR%\.venv"
+set "VENV_DIR=%REPO_ROOT%\.venv"
 if not exist "%VENV_DIR%" (
     call :show_progress "Sozdanie virtualnogo okruzheniya..."
     "%PYTHON%" %PYTHON_EXTRA% -m venv "%VENV_DIR%"
@@ -106,15 +106,15 @@ if errorlevel 1 (
 
 call :show_progress "Ustanovka zavisimostey (requirements.txt)..."
 echo   (nizhe — progress pip)
-pip install -r "%TCA_DIR%\requirements.txt"
+pip install -r "%REPO_ROOT%\requirements.txt"
 if errorlevel 1 (
     echo   [X] Oshibka pip install
     exit /b 1
 )
 echo   [OK] Zavisimosti ustanovleny
 
-if not exist "%TCA_DIR%\Agent\.env" (
-    if not exist "%TCA_DIR%\.env" (
+if not exist "%REPO_ROOT%\Agent\.env" (
+    if not exist "%REPO_ROOT%\.env" (
         echo.
         echo   [!] Fail .env ne nayden!
         echo       Sozdayte Agent\.env s API klyuchom.
@@ -122,34 +122,42 @@ if not exist "%TCA_DIR%\Agent\.env" (
     )
 )
 
-call :show_progress "Sozdanie komandy tca i PATH..."
+call :show_progress "Sozdanie komand lorne / tca i PATH..."
 
-set "TCA_BAT=%VENV_DIR%\Scripts\tca.bat"
 set "SCRIPTS_DIR=%VENV_DIR%\Scripts"
 if not exist "%SCRIPTS_DIR%" (
     echo   [X] Papka ne naydena: %SCRIPTS_DIR%
     exit /b 1
 )
+
+set "LORNE_BAT=%SCRIPTS_DIR%\lorne.bat"
 (
     echo @echo off
-    echo "%SCRIPTS_DIR%\python.exe" "%TCA_DIR%\tca.py" %%*
-) > "%TCA_BAT%"
+    echo "%SCRIPTS_DIR%\python.exe" "%REPO_ROOT%\tca.py" %%*
+) > "%LORNE_BAT%"
 
-set "TCA_CMD=%TCA_DIR%\tca.cmd"
+set "LORNE_CMD=%REPO_ROOT%\lorne.cmd"
 (
     echo @echo off
-    echo "%SCRIPTS_DIR%\python.exe" "%TCA_DIR%\tca.py" %%*
-) > "%TCA_CMD%"
+    echo "%SCRIPTS_DIR%\python.exe" "%REPO_ROOT%\tca.py" %%*
+) > "%LORNE_CMD%"
 
-set "TCA_GLOBAL=%LOCALAPPDATA%\TCA"
-if not exist "%TCA_GLOBAL%" mkdir "%TCA_GLOBAL%"
+set "TCA_BAT=%SCRIPTS_DIR%\tca.bat"
+copy /Y "%LORNE_BAT%" "%TCA_BAT%" >nul
+
+set "TCA_CMD=%REPO_ROOT%\tca.cmd"
+copy /Y "%LORNE_CMD%" "%TCA_CMD%" >nul
+
+set "LORNE_GLOBAL=%LOCALAPPDATA%\Lorne"
+if not exist "%LORNE_GLOBAL%" mkdir "%LORNE_GLOBAL%"
 (
     echo @echo off
-    echo "%SCRIPTS_DIR%\python.exe" "%TCA_DIR%\tca.py" %%*
-) > "%TCA_GLOBAL%\tca.cmd"
+    echo "%SCRIPTS_DIR%\python.exe" "%REPO_ROOT%\tca.py" %%*
+) > "%LORNE_GLOBAL%\lorne.cmd"
+copy /Y "%LORNE_GLOBAL%\lorne.cmd" "%LORNE_GLOBAL%\tca.cmd" >nul
 
-set "ADD_PATH=%TCA_GLOBAL%"
-powershell -NoProfile -Command "$p = [Environment]::GetEnvironmentVariable('Path', 'User'); if ($p -notlike '*%ADD_PATH%*') { [Environment]::SetEnvironmentVariable('Path', $p + ';' + '%ADD_PATH%', 'User'); Write-Host '  [OK] tca dobavlena v PATH (globalno)' } else { Write-Host '  [OK] tca uzhe v PATH' }"
+set "ADD_PATH=%LORNE_GLOBAL%"
+powershell -NoProfile -Command "$p = [Environment]::GetEnvironmentVariable('Path', 'User'); if ($p -notlike '*%ADD_PATH%*') { [Environment]::SetEnvironmentVariable('Path', $p + ';' + '%ADD_PATH%', 'User'); Write-Host '  [OK] lorne i tca dobavleny v PATH (globalno)' } else { Write-Host '  [OK] Lorne uzhe v PATH' }"
 if errorlevel 1 (
     echo   [!] Ne udalos dobavit v PATH.
 )
@@ -160,18 +168,19 @@ for /f %%e in ('powershell -NoProfile -Command "([DateTimeOffset]::UtcNow.ToUnix
 
 echo.
 echo [========================================]
-echo   [OK] TCA ustanovlen uspeshno!
+echo   [OK] Lorne ustanovlen uspeshno!
 echo [========================================]
 echo.
 echo   Vremya ustanovki: !BUILD_SEC! s
 echo.
-echo   Komanda tca dostupna GLOBALNO.
-echo   Otkroyte novoe okno konsoli esli tca esche ne nakhoditsya.
+echo   Komandy lorne i tca (alias) dostupny GLOBALNO.
+echo   Otkroyte novoe okno konsoli esli komanda esche ne nakhoditsya.
 echo.
 echo   Ispolzovanie:
-echo     tca                          - zapusk v tekushchey papke
-echo     tca C:\path\to\project        - zapusk v ukazannom proekte
-echo     tca env=sk-or-v1-...         - zapusk s API klyuchom
+echo     lorne                        - zapusk v tekushchey papke
+echo     lorne C:\path\to\project      - zapusk v ukazannom proekte
+echo     lorne env=sk-or-v1-...       - zapusk s API klyuchom
+echo     tca …                        - to zhe (sovmestimost)
 echo.
 
 endlocal

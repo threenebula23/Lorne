@@ -1,6 +1,6 @@
-"""Git integration for TCA — automatic snapshots and rollback.
+"""Git integration for Lorne — automatic snapshots and rollback.
 
-Provides auto-commit on file changes (on a dedicated branch tca/auto),
+Provides auto-commit on file changes (on a dedicated branch ``lorne/auto``),
 commit-level rollback, and file history viewing.
 """
 from __future__ import annotations
@@ -21,7 +21,8 @@ except ImportError:
 class GitManager:
     """Manages Git operations for the project directory."""
 
-    TCA_BRANCH = "tca/auto"
+    LORNE_BRANCH = "lorne/auto"
+    TCA_BRANCH = LORNE_BRANCH  # совместимость со старым именем атрибута
 
     def __init__(self, repo_path: Optional[Path] = None):
         self._repo: Optional[Any] = None
@@ -49,7 +50,7 @@ class GitManager:
         """Create an automatic commit with changed files.
 
         Args:
-            message: Commit message (prefixed with [TCA])
+            message: Commit message (prefixed with [Lorne])
             files: Specific files to commit, or None for all changes
 
         Returns:
@@ -71,7 +72,7 @@ class GitManager:
             if not self._repo.index.diff("HEAD") and not self._repo.untracked_files:
                 return None
 
-            commit = self._repo.index.commit(f"[TCA] {message}")
+            commit = self._repo.index.commit(f"[Lorne] {message}")
             return str(commit.hexsha)[:10]
         except Exception:
             return None

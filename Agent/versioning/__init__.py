@@ -10,11 +10,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from Agent.runtime_paths import project_data_dir
+
 
 def _db_path() -> Path:
-    tca_dir = Path.cwd() / ".tca"
-    tca_dir.mkdir(exist_ok=True)
-    return tca_dir / "versions.sqlite"
+    data = project_data_dir()
+    data.mkdir(parents=True, exist_ok=True)
+    return data / "versions.sqlite"
 
 
 def _init_db() -> None:

@@ -1,4 +1,4 @@
-"""Code Interpreter tool for TCA agent.
+"""Code Interpreter tool for Lorne agent.
 Allows the agent to execute Python code and see the output.
 """
 from __future__ import annotations

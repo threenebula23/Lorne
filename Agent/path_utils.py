@@ -9,6 +9,12 @@ def set_project_root(root: Path | str) -> None:
     _GLOBAL_PROJECT_ROOT = Path(root).expanduser().resolve()
 
 
+def clear_project_root() -> None:
+    """Reset project root override (tests / subprocess boundaries)."""
+    global _GLOBAL_PROJECT_ROOT
+    _GLOBAL_PROJECT_ROOT = None
+
+
 def get_project_root() -> Path:
     """Текущий корень проекта (как у resolve_abs_path для относительных путей)."""
     return _GLOBAL_PROJECT_ROOT if _GLOBAL_PROJECT_ROOT is not None else Path.cwd()

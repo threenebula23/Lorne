@@ -1,1 +1,1 @@
-"""TCA IDE panels — modular widgets for the full-screen TUI."""
+"""Панели IDE Lorne — виджеты полноэкранного TUI."""

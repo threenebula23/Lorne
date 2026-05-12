@@ -1,4 +1,4 @@
-"""Git tools for the TCA agent — log, diff, rollback via LangChain @tool."""
+"""Git tools for the Lorne agent — log, diff, rollback via LangChain @tool."""
 from typing import Any, Dict
 
 from langchain_core.tools import tool

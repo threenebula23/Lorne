@@ -85,6 +85,27 @@ class SearchInFilesArgs(BaseModel):
     max_files: int = Field(default=50, ge=1, le=200)
 
 
+class FindInFileArgs(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    file_path: str = Field(
+        ...,
+        min_length=1,
+        max_length=2048,
+        validation_alias=AliasChoices("file_path", "path", "filename", "file"),
+    )
+    pattern: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000,
+        validation_alias=AliasChoices("pattern", "query", "text", "needle"),
+    )
+    regex: bool = False
+    case_insensitive: bool = True
+    max_matches: int = Field(default=100, ge=1, le=2000)
+    context_lines: int = Field(default=0, ge=0, le=20)
+
+
 class EditFileArgs(BaseModel):
     """Совпадает с `edit_file(path, old_str, new_str)` в file_ops.py."""
 
@@ -202,6 +223,19 @@ class RunCommandArgs(BaseModel):
     command: str = Field(..., min_length=1, max_length=8000, description="Одна команда; без интерактива")
     cwd: str = Field(default=".", max_length=2048)
     timeout_seconds: int = Field(default=120, ge=5, le=3600)
+    background: bool = Field(
+        default=False,
+        description="Запустить в фоне (dev-серверы); лог в каталоге данных проекта (.lorne / .tca) / background_cmd.log",
+    )
+
+
+class RunPackageScriptArgs(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    script: str = Field(default="build", max_length=64)
+    package_manager: str = Field(default="npm", max_length=8)
+    cwd: str = Field(default="", max_length=2048)
+    timeout_seconds: int = Field(default=300, ge=10, le=3600)
 
 
 class WebSearchArgs(BaseModel):
@@ -239,7 +273,7 @@ class PlanToolArgs(BaseModel):
 
     action: Literal["save", "load", "update", "clear"] = Field(..., description="Один action за вызов")
     title: str = Field(default="", max_length=500)
-    steps_json: str = Field(default="[]", max_length=200_000, description="Для save: JSON-массив строк шагов")
+    steps_json: str = Field(default="[]", max_length=200_000, description="save: JSON [] строк")
     step_index: int = Field(default=0, ge=0, le=10_000)
     status: Literal["pending", "in_progress", "completed", "blocked"] = "pending"
     note: str = Field(default="", max_length=2000)
@@ -345,6 +379,27 @@ class CodeInterpreterArgs(BaseModel):
     code: str = Field(..., min_length=1, max_length=500_000)
 
 
+class ProjectBrainToolArgs(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    action: str = Field(default="refresh", max_length=48)
+    content: str = Field(
+        default="",
+        max_length=60_000,
+        description="write_architecture / write_brain: markdown",
+    )
+    write_mode: str = Field(
+        default="append",
+        max_length=16,
+        description="append|replace",
+    )
+    brain_rel_path: str = Field(
+        default="",
+        max_length=512,
+        description="write_brain: путь под project_brain/, напр. agent/overview_notes.md",
+    )
+
+
 class RagSearchArgs(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
@@ -389,11 +444,13 @@ TOOL_ARG_MODELS: Dict[str, Type[BaseModel]] = {
     "start_background_task": StartBackgroundTaskArgs,
     "get_background_result": GetBackgroundResultArgs,
     "search_in_files": SearchInFilesArgs,
+    "find_in_file": FindInFileArgs,
     "edit_file": EditFileArgs,
     "write_file": WriteFileArgs,
     "replace_file_lines": ReplaceFileLinesArgs,
     "insert_file_lines": InsertFileLinesArgs,
     "run_command": RunCommandArgs,
+    "run_package_script": RunPackageScriptArgs,
     "web_search": WebSearchArgs,
     "web_fetch": WebFetchArgs,
     "download_file": DownloadFileArgs,
@@ -408,6 +465,7 @@ TOOL_ARG_MODELS: Dict[str, Type[BaseModel]] = {
     "ask_user": AskUserArgs,
     "code_interpreter": CodeInterpreterArgs,
     "rag_search": RagSearchArgs,
+    "project_brain_tool": ProjectBrainToolArgs,
     "headless_browser": HeadlessBrowserArgs,
     "playwright_sync": PlaywrightSyncArgs,
 }
@@ -624,6 +682,49 @@ def _coerce_common_arg_mistakes(tool_name: str, args: Dict[str, Any]) -> Dict[st
             patched["step_index"] = 0
 
         return patched
+
+    if tool_name == "project_brain_tool":
+        p = dict(args)
+        if not str(p.get("brain_rel_path", "") or "").strip():
+            for alt in ("rel_path", "brain_path", "md_path", "target_file"):
+                v = p.get(alt)
+                if isinstance(v, str) and v.strip():
+                    vv = v.strip().replace("\\", "/").lstrip("/")
+                    if vv.startswith("project_brain/"):
+                        vv = vv[len("project_brain/") :]
+                    if ".." not in vv.split("/"):
+                        p["brain_rel_path"] = vv
+                        break
+        a0 = str(p.get("action", "") or "").strip().lower()
+        if a0 == "write":
+            p["action"] = (
+                "write_brain"
+                if str(p.get("brain_rel_path", "") or "").strip()
+                else "write_architecture"
+            )
+        elif a0 in ("brain_write", "write_md", "md_write"):
+            p["action"] = "write_brain"
+        act = str(p.get("action", "") or "").strip().lower()
+        if act in ("architecture", "arch_legacy"):
+            p["action"] = "write_architecture"
+        if not str(p.get("content", "") or "").strip():
+            for alt in ("markdown", "text", "body", "architecture_md", "note"):
+                v = p.get(alt)
+                if isinstance(v, str) and v.strip():
+                    p["content"] = v.strip()
+                    break
+        wm = str(p.get("write_mode", "") or "").strip().lower()
+        if wm in ("a", "add", "concat"):
+            p["write_mode"] = "append"
+        elif wm in ("r", "overwrite", "full", "set"):
+            p["write_mode"] = "replace"
+        c = p.get("content")
+        if isinstance(c, str) and len(c) > 60_000:
+            p["content"] = c[:60_000]
+        brp = p.get("brain_rel_path")
+        if isinstance(brp, str) and len(brp) > 512:
+            p["brain_rel_path"] = brp[:512]
+        return p
 
     if tool_name == "web_fetch" and "url" not in args:
         candidate = ""

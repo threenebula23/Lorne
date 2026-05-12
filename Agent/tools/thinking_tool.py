@@ -1,4 +1,4 @@
-"""Thinking and analysis tools for the TCA agent.
+"""Thinking and analysis tools for the Lorne agent.
 
 Provides structured reasoning, diff visualization, and code analysis
 that integrate with the TUI bridge for display.
@@ -13,9 +13,7 @@ from langchain_core.tools import tool
 
 @tool
 def think(thought: str) -> Dict[str, Any]:
-    """Записать свои рассуждения. Используй для планирования, анализа, принятия решений.
-    Мысли отображаются в панели Thoughts. Помогает структурировать подход к задаче.
-    Пример: think('Нужно сначала прочитать файл, понять структуру, потом внести изменения')"""
+    """Краткая запись рассуждения; отображается в панели Thoughts."""
     try:
         from Interface.tui_bridge import get_bridge
         bridge = get_bridge()
@@ -33,9 +31,7 @@ def think(thought: str) -> Dict[str, Any]:
 
 @tool
 def show_diff(path: str, old_content: str, new_content: str) -> Dict[str, Any]:
-    """Показать diff между старым и новым содержимым файла.
-    Используй перед edit_file чтобы визуализировать изменения.
-    path — путь к файлу, old_content — старый текст, new_content — новый текст."""
+    """Unified diff old_content vs new_content для path (визуализация перед edit_file)."""
     old_lines = old_content.splitlines()
     new_lines = new_content.splitlines()
 

@@ -1,6 +1,7 @@
 """Инструменты работы с файлами: чтение, листинг, поиск в подпапках, редактирование."""
 import fnmatch
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -102,17 +103,7 @@ _READ_FILE_HARD_LINE_CAP = 5000
 @tool
 def read_file(filename: str, encoding: str = "utf-8",
               offset: int = 0, limit: int = 0) -> Dict[str, Any]:
-    """Читает файл целиком или диапазон.
-
-    Параметры (всё опционально):
-      • offset — начальная строка (0-based).
-      • limit — кол-во строк (0 = до конца).
-
-    Экономия токенов: если файл длиннее ~400 строк и диапазон не задан,
-    возвращается только голова файла + предупреждение. Для больших файлов
-    используйте ``read_file_lines`` (1-based start/end — удобнее) или
-    передайте ``offset``/``limit``.
-    """
+    """Чтение файла: offset/limit (0-based строки); без диапазона длинные файлы обрезаются (~400 строк) — дальше read_file_lines."""
     full_path = resolve_abs_path(filename)
     try:
         content = full_path.read_text(encoding=encoding)
@@ -157,19 +148,7 @@ def read_file(filename: str, encoding: str = "utf-8",
 @tool
 def read_file_lines(filename: str, start_line: int = 1, end_line: int = 0,
                     encoding: str = "utf-8") -> Dict[str, Any]:
-    """Читает фрагмент файла по 1-based диапазону строк — для экономии токенов.
-
-    Параметры:
-      • start_line — первая строка включительно (1-based, min 1).
-      • end_line — последняя строка включительно; 0 означает «до конца файла»
-        (но не больше ``start_line + 5000`` строк).
-      • encoding — по умолчанию utf-8.
-
-    Возвращает ``content`` с префиксом номеров строк ``N| …`` (так модель
-    сразу видит какие строки она получила), плюс метаданные.
-    Предпочтительный тул для больших файлов: читайте кусками по 50-300
-    строк вокруг интересующего места, а не весь файл целиком.
-    """
+    """Фрагмент по строкам (1-based start_line..end_line; end_line=0 — до конца, кап 5000 строк). Номера в content как ``N|``."""
     full_path = resolve_abs_path(filename)
     try:
         raw = full_path.read_text(encoding=encoding)
@@ -309,6 +288,85 @@ def search_in_files(directory: str, query: str, file_pattern: str = "*.py", max_
         except Exception:
             continue
     return {"query": query, "directory": str(root), "matches": results}
+
+
+@tool
+def find_in_file(
+    file_path: str,
+    pattern: str,
+    regex: bool = False,
+    case_insensitive: bool = True,
+    max_matches: int = 100,
+    context_lines: int = 0,
+) -> Dict[str, Any]:
+    """Один файл: подстрока или regex + номера строк; большие файлы — сначала read_file_lines."""
+    p = resolve_abs_path(file_path)
+    if not p.is_file():
+        return {"file_path": str(p), "error": "not_found_or_not_file", "matches": []}
+    if not (pattern or "").strip():
+        return {"file_path": str(p), "error": "empty_pattern", "matches": []}
+    if context_lines > 20:
+        context_lines = 20
+    if context_lines < 0:
+        context_lines = 0
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return {"file_path": str(p), "error": str(e), "matches": []}
+
+    lines = text.splitlines()
+    out: List[Dict[str, Any]] = []
+    n = 0
+    flags = re.IGNORECASE if case_insensitive and regex else 0
+    if regex:
+        try:
+            cre = re.compile((pattern or "").strip(), flags)
+        except re.error as e:
+            return {
+                "file_path": str(p),
+                "error": f"invalid_regex: {e}",
+                "matches": [],
+            }
+
+        for i, line in enumerate(lines, start=1):
+            if n >= max_matches:
+                break
+            if cre.search(line):
+                rec: Dict[str, Any] = {"line": i, "text": line}
+                if context_lines and context_lines > 0:
+                    lo = max(0, i - 1 - context_lines)
+                    hi = min(len(lines), i + context_lines)
+                    rec["context"] = "\n".join(
+                        f"{j + 1:6d}|{lines[j]}" for j in range(lo, hi)
+                    )
+                out.append(rec)
+                n += 1
+    else:
+        needle = (pattern or "").lower() if case_insensitive else (pattern or "")
+        for i, line in enumerate(lines, start=1):
+            if n >= max_matches:
+                break
+            hay = line.lower() if case_insensitive else line
+            if (needle in hay) if case_insensitive else ((pattern or "") in line):
+                rec = {"line": i, "text": line}
+                if context_lines and context_lines > 0:
+                    lo = max(0, i - 1 - context_lines)
+                    hi = min(len(lines), i + context_lines)
+                    rec["context"] = "\n".join(
+                        f"{j + 1:6d}|{lines[j]}" for j in range(lo, hi)
+                    )
+                out.append(rec)
+                n += 1
+
+    return {
+        "file_path": str(p),
+        "pattern": pattern,
+        "regex": bool(regex),
+        "case_insensitive": bool(case_insensitive),
+        "match_count": len(out),
+        "matches": out,
+        "truncated": len(out) >= max_matches,
+    }
 
 
 @tool

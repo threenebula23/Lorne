@@ -1,4 +1,4 @@
-/* TCA IDE — Dark Purple Theme (default) */
+/* Lorne IDE — Dark Purple Theme (default) */
 
 Screen {
     background: #0D0D0D;
@@ -921,7 +921,22 @@ TextArea {
 .density-compact TabPane { padding: 0; }
 .density-compact #chat-input-area { padding: 0; max-height: 32; }
 .density-compact #chat-input { min-height: 2; max-height: 8; margin: 0 0 0 0; }
-.density-compact #ctx-meter-row { min-height: 1; margin: 0 0 0 0; }
+.density-compact #ctx-meter-row {
+    layout: vertical;
+    min-height: 2;
+    height: auto;
+    margin: 0 0 0 0;
+}
+.density-compact #ctx-progress-visual {
+    width: 100%;
+    min-width: 18;
+}
+.density-compact #ctx-session-line {
+    width: 100%;
+    min-width: 18;
+    text-align: left;
+    content-align: left middle;
+}
 .density-compact .file-actions { height: 1; min-height: 1; }
 .density-compact .file-actions Button { height: 1; min-height: 1; min-width: 5; }
 .density-compact Tabs { height: 1; min-height: 1; }

@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from Agent.runtime_paths import project_data_dir
+
 _DB_PATH: Optional[Path] = None
 _DB_INITIALIZED = False
 
@@ -11,9 +13,9 @@ _DB_INITIALIZED = False
 def _db() -> Path:
     global _DB_PATH
     if _DB_PATH is None:
-        tca_dir = Path.cwd() / ".tca"
-        tca_dir.mkdir(exist_ok=True)
-        _DB_PATH = tca_dir / "checkpoints.sqlite"
+        data = project_data_dir()
+        data.mkdir(parents=True, exist_ok=True)
+        _DB_PATH = data / "checkpoints.sqlite"
     return _DB_PATH
 
 

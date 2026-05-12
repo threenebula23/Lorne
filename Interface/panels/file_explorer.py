@@ -23,7 +23,7 @@ from rich.markdown import Markdown
 SKIP_DIRS = {
     ".git", ".idea", "__pycache__", "node_modules", ".venv", "venv",
     "env", ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
-    ".next", ".nuxt", ".DS_Store", ".tca",
+    ".next", ".nuxt", ".DS_Store", ".tca", ".lorne",
 }
 
 SYNTAX_THEME_MAP = {
@@ -65,7 +65,10 @@ class FilteredDirectoryTree(DirectoryTree):
         return [
             p for p in paths
             if p.name not in SKIP_DIRS
-            and not (p.name.startswith(".tca_") and p.is_file())
+            and not (
+                (p.name.startswith(".tca_") or p.name.startswith(".lorne_"))
+                and p.is_file()
+            )
         ]
 
     def render_label(self, node, base_style, style):
@@ -388,7 +391,7 @@ class FileExplorerPanel(Vertical):
         if not event.value or event.value == Select.BLANK:
             return
         prof = str(event.value)
-        os.environ["TCA_PROFILE"] = prof
+        os.environ["LORNE_PROFILE"] = prof
 
         def _work():
             try:

@@ -11,11 +11,13 @@ from typing import Any, Dict, List
 
 from langchain_core.tools import tool
 
+from Agent.runtime_paths import project_data_dir
+
 
 def _plan_path() -> Path:
-    tca_dir = Path.cwd() / ".tca"
-    tca_dir.mkdir(exist_ok=True)
-    return tca_dir / "plan.json"
+    data = project_data_dir()
+    data.mkdir(parents=True, exist_ok=True)
+    return data / "plan.json"
 
 
 def _load_raw() -> Dict[str, Any]:

@@ -1,4 +1,7 @@
-"""Tool registry: builds and manages the tool list and dispatch map."""
+"""Реестр инструментов Lorne: сборка списка тулов для LLM и карты dispatch.
+
+Точка расширения для новых тулов — см. wiki/developer/ADDING_TOOLS.md.
+"""
 from typing import Any, Dict, List
 
 from langchain_core.tools import BaseTool
@@ -7,8 +10,9 @@ try:
     from .tools.planning_tool import save_plan, load_plan, update_plan, clear_plan
     from .tools.versioning_tool import list_file_versions, rollback_file
     from .tools.office_document_tool import docx_document_advanced_ops, pdf_styled_document_create
+    from .tools.qa_tool import run_package_script
     from .tools import (
-        read_file, read_file_lines, list_files, edit_file, search_in_files, write_file,
+        read_file, read_file_lines, list_files, edit_file, search_in_files, find_in_file, write_file,
         replace_file_lines, insert_file_lines,
         get_file_line_count, run_command, download_file, create_pdf, ask_user,
         web_search, web_fetch,
@@ -29,6 +33,7 @@ try:
         headless_browser,
         playwright_sync,
         file_versions_tool,
+        project_brain_tool,
     )
     from .rag import get_rag_tool
     from .tools.parallel_helper_tool import start_background_task, get_background_result
@@ -36,8 +41,9 @@ except ImportError:
     from Agent.tools.planning_tool import save_plan, load_plan, update_plan, clear_plan
     from Agent.tools.versioning_tool import list_file_versions, rollback_file
     from Agent.tools.office_document_tool import docx_document_advanced_ops, pdf_styled_document_create
+    from Agent.tools.qa_tool import run_package_script
     from Agent.tools import (
-        read_file, read_file_lines, list_files, edit_file, search_in_files, write_file,
+        read_file, read_file_lines, list_files, edit_file, search_in_files, find_in_file, write_file,
         replace_file_lines, insert_file_lines,
         get_file_line_count, run_command, download_file, create_pdf, ask_user,
         web_search, web_fetch,
@@ -58,6 +64,7 @@ except ImportError:
         headless_browser,
         playwright_sync,
         file_versions_tool,
+        project_brain_tool,
     )
     from Agent.rag import get_rag_tool
     from Agent.tools.parallel_helper_tool import start_background_task, get_background_result
@@ -89,7 +96,7 @@ _base_tools: List[Any] = [
     get_file_line_count,
     code_file_tool,
     plan_tool,
-    search_in_files, run_command, download_file, create_pdf, ask_user,
+    search_in_files, find_in_file, run_command, run_package_script, download_file, create_pdf, ask_user,
     web_search, web_fetch,
     start_background_task, get_background_result,
     ocr_tool,
@@ -101,6 +108,7 @@ _base_tools: List[Any] = [
     reasoning_tool,
     code_interpreter,
     get_rag_tool(),
+    project_brain_tool,
 ]
 
 if _HAS_GIT_TOOLS:
@@ -133,10 +141,20 @@ if _HAS_PLAYWRIGHT_SYNC:
 
 _tool_session_flags: Dict[str, bool] = {
     "agent_mode": False,
+    "ask_mode": False,
     "playwright_python": False,
     "browser_tools": True,
     "custom_tools": True,
 }
+
+_ASK_EXCLUDED_TOOL_NAMES = frozenset({
+    "edit_file", "write_file", "replace_file_lines", "insert_file_lines",
+    "code_file_tool", "docx_write_tool", "docxedit_tool", "docx_document_advanced_ops",
+    "pdf_styled_document_create", "git_ops", "download_file", "run_command",
+    "start_background_task", "get_background_result", "run_package_script",
+    "create_pdf", "file_versions_tool", "code_interpreter",
+    "project_brain_tool",
+})
 
 
 # Names of the "custom" tools that users can disable wholesale from the
@@ -149,17 +167,20 @@ _CUSTOM_TOOL_NAMES = frozenset({
     "code_interpreter",
     "library_context",
     "file_versions_tool",
+    "project_brain_tool",
 })
 
 
 def set_tool_session_prefs(
     *,
     agent_mode: bool = False,
+    ask_mode: bool = False,
     playwright_python: bool = False,
     browser_tools: bool = True,
     custom_tools: bool = True,
 ) -> None:
     _tool_session_flags["agent_mode"] = bool(agent_mode)
+    _tool_session_flags["ask_mode"] = bool(ask_mode)
     _tool_session_flags["playwright_python"] = bool(playwright_python)
     _tool_session_flags["browser_tools"] = bool(browser_tools)
     _tool_session_flags["custom_tools"] = bool(custom_tools)
@@ -171,13 +192,20 @@ def _strip_custom_tools(tools: List[Any]) -> List[Any]:
 
 def build_tools(
     agent_mode: bool = False,
+    ask_mode: bool = False,
     playwright_python: bool = False,
     browser_tools: bool = True,
     custom_tools: bool = True,
 ) -> tuple[List[Any], Any]:
+    """Return ``(tools, custom_list)`` for the session; flags control browser / ask."""
     custom = load_custom_tools() if custom_tools else []
     base = list(_base_tools) if custom_tools else _strip_custom_tools(_base_tools)
     all_tools = base + list(custom)
+    if ask_mode:
+        all_tools = [
+            t for t in all_tools
+            if (getattr(t, "name", "") or "") not in _ASK_EXCLUDED_TOOL_NAMES
+        ]
     if agent_mode and browser_tools and _browser_node_tools:
         all_tools.extend(_browser_node_tools)
     if agent_mode and playwright_python and _playwright_python_tools:
@@ -226,11 +254,12 @@ def bind_tools_safe(llm_obj: Any, model_name: str, tools: List[Any],
 def reload_tools(current_tools: List[Any]) -> List[Any]:
     custom_new = reload_custom_tools()
     am = _tool_session_flags.get("agent_mode", False)
+    ask = _tool_session_flags.get("ask_mode", False)
     pw = _tool_session_flags.get("playwright_python", False)
     bw = _tool_session_flags.get("browser_tools", True)
     ct = _tool_session_flags.get("custom_tools", True)
     fresh, _ = build_tools(
-        agent_mode=am, playwright_python=pw, browser_tools=bw, custom_tools=ct,
+        agent_mode=am, ask_mode=ask, playwright_python=pw, browser_tools=bw, custom_tools=ct,
     )
     current_tools.clear()
     current_tools.extend(fresh)

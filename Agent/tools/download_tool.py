@@ -76,7 +76,11 @@ def _clear_cancel_flag(download_id: str) -> None:
 
 # ─── Helpers ──────────────────────────────────────────────────────────
 
-_DEFAULT_UA = "Mozilla/5.0 (TCA download_file tool)"
+try:
+    from Interface.branding import user_agent_fragment
+    _DEFAULT_UA = f"Mozilla/5.0 ({user_agent_fragment()}; download_file)"
+except Exception:
+    _DEFAULT_UA = "Mozilla/5.0 (Lorne download_file tool)"
 _MAX_BYTES_DEFAULT = 200 * 1024 * 1024  # 200 MiB
 _CHUNK = 64 * 1024
 
@@ -108,20 +112,7 @@ def _bridge() -> Optional[Any]:
 @tool
 def download_file(url: str, dest: str = "", max_bytes: int = 0,
                   timeout_seconds: int = 60) -> Dict[str, Any]:
-    """Скачать файл по URL с показом прогресса в чате.
-
-    Аргументы:
-        url: полный https/http адрес.
-        dest: относительный или абсолютный путь назначения.
-              Если пусто — ``./downloads/<basename>``.
-        max_bytes: лимит размера в байтах (0 = дефолт 200 МиБ).
-        timeout_seconds: таймаут соединения.
-
-    Возвращает словарь с ``status`` (``ok``/``cancelled``/``error``),
-    ``path`` (куда сохранено), ``bytes``, ``elapsed_seconds``, ``url``,
-    ``content_type``. В TUI сверху возникает прогресс-бар с кнопкой
-    «Отменить», ставящей флаг для этого ``download_id``.
-    """
+    """HTTP(S) загрузка в workspace; dest пустой → ./downloads/<basename>; max_bytes 0 = 200 МиБ; прогресс/отмена в TUI."""
     u = str(url or "").strip()
     if not u or not u.lower().startswith(("http://", "https://")):
         return {"status": "error", "error": "invalid_url",

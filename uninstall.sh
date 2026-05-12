@@ -1,10 +1,10 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════
-#  TCA — Terminal Coding Assistant — Деинсталляция
+#  Lorne v0.98 — деинсталляция
 # ═══════════════════════════════════════════════════════
 #
 #  Этот скрипт:
-#  1. Удаляет симлинк/копию команды `tca` из PATH
+#  1. Удаляет симлинки/копии команд ``lorne`` и ``tca`` из PATH
 #  2. Удаляет виртуальное окружение (.venv)
 #  3. Опционально удаляет данные сессий, версий и конфиг
 #
@@ -22,7 +22,7 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
-TCA_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 U0=$(date +%s)
 
 _elapsed_s() {
@@ -50,26 +50,29 @@ TOTAL=5
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}║  TCA — Деинсталляция                        ║${RESET}"
+echo -e "${BOLD}║  Lorne — деинсталляция                      ║${RESET}"
 echo -e "${BOLD}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
 
-_tca_u_progress 1 "$TOTAL" "Удаление команды tca из известных каталогов PATH…"
+_tca_u_progress 1 "$TOTAL" "Удаление команд lorne / tca из известных каталогов PATH…"
 
 for dir in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
-    SYMLINK="$dir/tca"
-    if [ -L "$SYMLINK" ] || [ -f "$SYMLINK" ]; then
-        rm -f "$SYMLINK" 2>/dev/null \
-            && echo -e "  ${GREEN}✓${RESET} Удалена команда: $SYMLINK" \
-            || echo -e "  ${YELLOW}⚠ Не удалось удалить $SYMLINK (попробуйте sudo rm $SYMLINK)${RESET}"
-    fi
+    for name in lorne tca; do
+        SYMLINK="$dir/$name"
+        if [ -L "$SYMLINK" ] || [ -f "$SYMLINK" ]; then
+            rm -f "$SYMLINK" 2>/dev/null \
+                && echo -e "  ${GREEN}✓${RESET} Удалена команда: $SYMLINK" \
+                || echo -e "  ${YELLOW}⚠ Не удалось удалить $SYMLINK (попробуйте sudo rm $SYMLINK)${RESET}"
+        fi
+    done
 done
 
 _tca_u_progress 2 "$TOTAL" "Удаление виртуального окружения .venv…"
 
-VENV_DIR="$TCA_DIR/.venv"
+VENV_DIR="$REPO_ROOT/.venv"
 
 if [ -d "$VENV_DIR" ]; then
+    rm -f "$VENV_DIR/bin/lorne" "$VENV_DIR/bin/tca" 2>/dev/null || true
     rm -rf "$VENV_DIR"
     echo -e "  ${GREEN}✓${RESET} Виртуальное окружение удалено"
 else
@@ -83,10 +86,12 @@ echo -ne "  Удалить данные сессий, версий и конфи
 read -r answer
 
 if [[ "$answer" =~ ^[yYдД] ]]; then
-    rm -rf "$TCA_DIR/.tca" 2>/dev/null || true
-    rm -f "$TCA_DIR/.tca_checkpoints.sqlite" "$TCA_DIR/.tca_versions.sqlite" 2>/dev/null || true
-    rm -f "$TCA_DIR/.tca_plan.json" 2>/dev/null || true
-    rm -f "$HOME/.tca_config.json" 2>/dev/null || true
+    rm -rf "$REPO_ROOT/.lorne" "$REPO_ROOT/.tca" 2>/dev/null || true
+    rm -f "$REPO_ROOT/.tca_checkpoints.sqlite" "$REPO_ROOT/.tca_versions.sqlite" 2>/dev/null || true
+    rm -f "$REPO_ROOT/.tca_plan.json" 2>/dev/null || true
+    rm -f "$HOME/.lorne_config.json" "$HOME/.tca_config.json" 2>/dev/null || true
+    rm -rf "$HOME/.lorne_custom_tools" "$HOME/.tca_custom_tools" 2>/dev/null || true
+    rm -f "$HOME/.lorne_recent_projects.json" "$HOME/.tca_recent_projects.json" 2>/dev/null || true
     echo -e "  ${GREEN}✓${RESET} Данные удалены"
 else
     echo -e "  ${DIM}Данные сохранены${RESET}"
@@ -94,7 +99,7 @@ fi
 
 _tca_u_progress 4 "$TOTAL" "Очистка __pycache__…"
 
-find "$TCA_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find "$REPO_ROOT" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 echo -e "  ${GREEN}✓${RESET} Кэш Python очищен"
 
 _tca_u_progress "$TOTAL" "$TOTAL" "Готово"
@@ -102,11 +107,11 @@ _tca_u_progress "$TOTAL" "$TOTAL" "Готово"
 ELAPSED=$(_elapsed_s)
 echo ""
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}${GREEN}║  ✓ TCA деинсталлирован                      ║${RESET}"
+echo -e "${BOLD}${GREEN}║  ✓ Lorne деинсталлирован                    ║${RESET}"
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
 echo -e "  ${DIM}Время выполнения: ${BOLD}${ELAPSED}${RESET}${DIM} с${RESET}"
 echo ""
-echo -e "  ${DIM}Исходный код остался в: $TCA_DIR${RESET}"
-echo -e "  ${DIM}Для полного удаления: rm -rf \"$TCA_DIR\"${RESET}"
+echo -e "  ${DIM}Исходный код остался в: $REPO_ROOT${RESET}"
+echo -e "  ${DIM}Для полного удаления: rm -rf \"$REPO_ROOT\"${RESET}"
 echo ""

@@ -121,33 +121,33 @@ class TUIBridge:
         self._call(self.app.chat.add_info, f"📝 {summary}")
 
     def on_tool_result(self, tool_name: str, result: Any) -> None:
-        # Route through the pretty ToolCardBlock for a curated set of
-        # "read-only / side-effect" tools (read_file, list_files,
-        # run_command, …). Write tools stay on the legacy one-liner +
-        # CodeDiffBlock path because the diff is more informative than a
-        # textual summary.
+        # Карточки для почти всех тулов; мутации файлов — короткая строка + diff
+        # (см. accumulate_tool_result / CodeDiffBlock).
         try:
-            from Interface.panels.tool_card import PRETTY_TOOL_NAMES as _PRETTY
+            from Interface.panels.ai_chat._constants import _WRITE_TOOLS as _WT
         except Exception:
-            _PRETTY = frozenset()
+            _WT = frozenset()
 
-        if tool_name in _PRETTY:
-            self._call(self.app.chat.add_tool_card, tool_name, result)
-        else:
+        if tool_name == "plan_tool":
+            self._call(self.app.chat.add_plan_tool_card, result)
+        elif tool_name in _WT:
             summary = ""
             if isinstance(result, dict):
                 if result.get("error"):
                     summary = f"error: {result.get('error')}"
                 elif result.get("action"):
-                    summary = result.get("action", "")
+                    summary = str(result.get("action", ""))
                 elif result.get("file_path"):
                     summary = str(result.get("file_path", ""))
+                elif result.get("path"):
+                    summary = str(result.get("path", ""))
                 elif result.get("stdout"):
-                    stdout = str(result["stdout"])[:100]
-                    summary = stdout
+                    summary = str(result["stdout"])[:100]
             elif isinstance(result, str):
                 summary = result[:80]
             self._call(self.app.chat.add_tool_result, tool_name, summary)
+        else:
+            self._call(self.app.chat.add_tool_card, tool_name, result)
 
         if isinstance(result, dict):
             self._call(self.app.chat.accumulate_tool_result, tool_name, result)
@@ -240,8 +240,10 @@ class TUIBridge:
         """Show a pseudo-attachment chip for a continued checkpoint."""
         self._call(self.app.chat.add_deep_context_chip, cp_id, label)
 
-    def on_deep_status(self, *, running: bool, elapsed: str = "",
-                       checkpoints: int = 0, model: str = "") -> None:
+    def on_deep_status(
+        self, *, running: bool, elapsed: str = "",
+        checkpoints: int = 0, model: str = "", current_step: int = 0,
+    ) -> None:
         """Refresh the elapsed-time badge rendered above the chat input
         while a Deep Solver run is live. Called on a heartbeat from the
         Deep loop so the user can watch wall-clock time tick up without
@@ -251,6 +253,7 @@ class TUIBridge:
             self.app.chat.set_deep_status,
             running=running, elapsed=elapsed,
             checkpoints=checkpoints, model=model,
+            current_step=current_step,
         )
 
     def on_download_progress(self, *, download_id: str, url: str,

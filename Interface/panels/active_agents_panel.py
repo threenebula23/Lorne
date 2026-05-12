@@ -1,4 +1,4 @@
-"""Lower-left panel — live agent / worker tree (Creator mode)."""
+"""Нижняя левая панель: дерево агентов и воркеров в режиме Creator."""
 from __future__ import annotations
 
 from typing import Any, Dict, Optional

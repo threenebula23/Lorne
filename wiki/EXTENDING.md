@@ -1,174 +1,21 @@
 # Расширение TCA
 
-Руководство по добавлению своих инструментов, моделей и настройке Creator Mode.
+## Инструменты
 
-**Карта модулей и архитектура:** [ARCHITECTURE.md](ARCHITECTURE.md)
+Полный чеклист: **[developer/ADDING_TOOLS.md](developer/ADDING_TOOLS.md)**.
 
-## Свой инструмент через CLI
+Кратко: реализация в `Agent/tools/` → реестр `Agent/tool_registry.py` → схемы `Agent/tool_schemas.py` → при необходимости `compact_tools.py` → UI `tool_card.py` → тесты → wiki ([TOOLS.md](TOOLS.md), [tool/REFERENCE.md](tool/REFERENCE.md)).
 
-Самый быстрый способ:
+## TUI
 
-```bash
-tca
-❯ /custom add my_tool
-```
+Новые панели и стили: `Interface/panels/`, `tui_app.tcss`. Мост: только через `TUIBridge`. См. [Interface/EXTENDING.md](Interface/EXTENDING.md).
 
-Шаблон создаётся в `~/.tca_custom_tools/my_tool.py`. Отредактируйте файл и перезагрузите:
+## Режимы и промпты
 
-```bash
-❯ /custom reload
-```
+Фрагменты режимов: `Agent/prompts/__init__.py` (`_MODE_ADDONS`). Системный текст: `Agent/system_promt.py`.
 
-## Свой инструмент через код
+## Creator
 
-### 1. Файл инструмента
+Оркестрация и воркеры: `Agent/creator_mode.py`, `creator_orchestration.py`. Настройки: `orchestration_mode`, `orchestration_max_workers` в `ui_settings.json`.
 
-Создайте `Agent/tools/my_tool.py`:
-
-```python
-from typing import Dict, Any
-from langchain_core.tools import tool
-
-@tool
-def my_awesome_tool(query: str, limit: int = 10) -> Dict[str, Any]:
-    """Описание для модели: параметры и что возвращает функция."""
-    results = do_something(query, limit)
-    return {"ok": True, "results": results, "count": len(results)}
-```
-
-### 2. Экспорт в `__init__.py`
-
-В `Agent/tools/__init__.py`:
-
-```python
-from .my_tool import my_awesome_tool
-```
-
-И добавьте имя в `__all__`.
-
-### 3. Регистрация в `tool_registry.py`
-
-В список `_base_tools` в `Agent/tool_registry.py` (или ветка `action` в **`Agent/tools/compact_tools.py`**, если логика близка к уже существующему мульти-тулу — см. [COMPACT_TOOLS.md](COMPACT_TOOLS.md)):
-
-```python
-_base_tools: List[Any] = [
-    # ... существующие ...
-    my_awesome_tool,
-]
-```
-
-### 4. (Опционально) Системный промпт
-
-В `Agent/system_promt.py` опишите, когда вызывать инструмент:
-
-```
-### Моя категория
-- my_awesome_tool(query, limit) → что делает.
-```
-
-### 5. (Опционально) Вывод в classic-режиме
-
-В `Interface/visualization.py` в `display_tool_result()`:
-
-```python
-if name == "my_awesome_tool" and isinstance(result, dict):
-    _display_my_tool_result(result)
-    return
-```
-
-## Новая модель
-
-Добавьте запись в `AVAILABLE_MODELS` в `Agent/llm_provider.py`:
-
-```python
-{"id": "provider/model-name", "name": "Отображаемое имя", "ctx": 128_000, "tier": "free"},
-```
-
-Уровни (`tier`): `free`, `cheap`, `paid`, `pro`.
-
-Если у провайдера есть `parallel_tool_calls`, добавьте в `_PROVIDER_CAPS`:
-
-```python
-"provider/": {"parallel_tool_calls": True, "native_tools": True},
-```
-
-## Интерфейс
-
-Подробное руководство по добавлению панелей, кнопок и стилей: [Interface/EXTENDING.md](Interface/EXTENDING.md).
-
-## Creator Mode
-
-Параллельное выполнение подзадач несколькими агентами.
-
-### Настройка
-
-1. Локальный сервер моделей (Ollama, LM Studio, vLLM):
-
-```bash
-ollama serve
-ollama pull qwen3.5:27b
-```
-
-2. Параметры TCA:
-
-```bash
-tca
-❯ /creator set local_base_url http://localhost:11434/v1
-❯ /creator set local_model qwen3.5:27b
-❯ /creator set max_workers 4
-```
-
-3. Включение и задача:
-
-```bash
-❯ /creator on
-❯ Создай REST API с авторизацией, тестами и документацией
-```
-
-### Как устроено
-
-1. **Планирование** — задача делится на подзадачи через LLM.
-2. **Маршрутизация** — подзадача помечается как `simple` или `complex`.
-   - Простые → локальная модель (быстро).
-   - Сложные → тяжёлая модель (OpenRouter).
-3. **Оркестрация** — см. параметр `orchestration`: при `supervisor` к ответу добавляется **`supervisor_synthesis`** (см. `creator_orchestration.py`, `creator_summary.py`).
-4. **Выполнение** — по умолчанию параллельно (`ThreadPoolExecutor`); при `sequential` — воркеры по очереди с накоплением handoff.
-5. **Интерфейс** — в TUI: дерево агентов и лог воркера в чате; в classic: Rich-панель ответа и список изменённых файлов. Итог в сессии — `format_creator_summary_text` (`creator_summary.py`).
-
-### Параметры
-
-| Параметр | Описание | По умолчанию |
-|----------|----------|----------------|
-| `local_base_url` | URL OpenAI-совместимого API | `http://{ipv4 вашего локального сервера}:3000/api` |
-| `local_model` | Имя модели на сервере | `qwen3.5:27b` |
-| `max_workers` | Макс. параллельных агентов | `4` |
-| **`orchestration`** | `parallel` — воркеры параллельно; `sequential` — цепочка с передачей контекста; `supervisor` — после воркеров сводка heavy-моделью; `hierarchical` — параллельно с разными ролями | `parallel` |
-
-Команда: `/creator set orchestration parallel` (или `sequential` / `supervisor` / `hierarchical`). Конфиг хранится в `~/.tca_config.json` → секция `creator`.
-
-## Схема classic-режима (обзор)
-
-```
-Ввод пользователя
-    │
-    ▼
-CommandRouter ──── slash-команды ──── прямой ответ
-    │
-    │ (обычный ввод)
-    ▼
-Planner ──── build_plan() ──── plan_tool
-    │
-    ▼
-AgentGraph.stream()
-    │
-    ├── call_model (вызов LLM с retry)
-    │   └── sanitize_messages → llm_with_tools.invoke()
-    │
-    ├── execute_tools (read-only параллельно, write по очереди)
-    │   ├── read_file, list_files, search_in_files (параллельно)
-    │   └── edit_file, write_file, run_command (последовательно)
-    │
-    └── should_continue → END, если нет tool_calls
-```
-
-План по-прежнему лежит в **`.tca/plan.json`**; `plan_tool` в `compact_tools.py` делегирует в `planning_tool` (`save_plan`, `load_plan`, …).
+Контракты: [developer/extension-contracts.md](developer/extension-contracts.md).

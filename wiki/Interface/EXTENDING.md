@@ -1,5 +1,7 @@
 # Руководство: Как расширять интерфейс (EXTENDING)
 
+Индекс документации: [wiki/README.md](../README.md) · настройки UI: [SETTINGS.md](SETTINGS.md) · тулы: [../developer/ADDING_TOOLS.md](../developer/ADDING_TOOLS.md).
+
 Если вы хотите добавить новую панель, кнопку или функционал в TCA, следуйте этой инструкции.
 
 ## 1. Добавление новой панели (Виджета)
@@ -20,7 +22,7 @@ class MyNewPanel(Static):
 ## 2. Связь через события (Messages)
 В Textual лучше не вызывать методы панелей напрямую из главного приложения. Используйте систему событий:
 1. В панели: `self.post_message(MyEvent(data))`
-2. В `TCAApp`:
+2. В `LorneApp`:
 ```python
 @on(MyEvent)
 def handle_my_event(self, event: MyEvent):

@@ -1,6 +1,6 @@
-"""Web search and page fetch tools for TCA agent.
+"""Инструменты web_search / web_fetch для агента Lorne.
 
-Кэш, компактный вывод для экономии токенов, явный список sources для ссылок в UI.
+Кэш, компактный вывод для экономии токенов, явный список ``sources`` для ссылок в UI.
 """
 from __future__ import annotations
 
@@ -14,7 +14,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.tools import tool
 
-# ─── Cache ──────────────────────────────────────────────────────────
+
+def _http_user_agent(short: bool = False) -> str:
+    """Строка User-Agent для исходящих HTTP-запросов инструментов."""
+    try:
+        from Interface.branding import user_agent_fragment
+        frag = user_agent_fragment()
+    except ImportError:
+        frag = "Lorne/0.98"
+    if short:
+        return f"Mozilla/5.0 (compatible; {frag})"
+    return f"Mozilla/5.0 (compatible; {frag}; +https://github.com)"
+
 
 _search_cache: Dict[str, tuple] = {}
 _fetch_cache: Dict[str, tuple] = {}
@@ -243,7 +254,7 @@ def web_fetch(url: str, max_length: int = 4500, code_block_chars: int = 1200) ->
         return cached
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; TCA/2.0; +https://github.com)",
+        "User-Agent": _http_user_agent(short=False),
         "Accept": "text/html,application/xhtml+xml,text/plain",
         "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
     }
@@ -332,7 +343,7 @@ def web_search_and_read(
 
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (compatible; TCA/2.0)",
+                "User-Agent": _http_user_agent(short=True),
                 "Accept": "text/html,text/plain",
             }
             req = urllib.request.Request(url, headers=headers)

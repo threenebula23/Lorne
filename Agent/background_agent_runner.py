@@ -21,11 +21,12 @@ from Agent.message_utils import (
     extract_thought_segments,
     strip_think_tags,
     extract_inline_write_file_args,
+    safe_chat_invoke_with_tool_recovery,
 )
 from Agent.tool_schemas import validate_tool_arguments
 
 _BG_SYSTEM = (
-    "Ты — вспомогательный мини-агент TCA. У тебя одна краткая задача (тест, curl, "
+    "Ты — вспомогательный мини-агент Lorne. У тебя одна краткая задача (тест, curl, "
     "pytest, проверка API, чтение логов). Работай только инструментами, без воды. "
     "Никаких ask_user. Заверши как можно быстрее. Если сервер ещё не готов — один "
     "короткий run_command (sleep + curl) или прочитай вывод. Результаты — факты из тулов."
@@ -39,7 +40,9 @@ def _run_one_assistant_turn(
     llm_with_tools: Any,
     messages: List[Any],
 ) -> tuple[AIMessage, str]:
-    raw = llm_with_tools.invoke(sanitize_messages(messages))
+    raw = safe_chat_invoke_with_tool_recovery(
+        llm_with_tools, sanitize_messages(messages),
+    )
     content = coerce_assistant_content_to_text(getattr(raw, "content", ""))
     if isinstance(content, str):
         content = content.encode("utf-8", "ignore").decode("utf-8", "ignore")
@@ -208,7 +211,7 @@ def start_background_job(
                 except Exception:
                     pass
 
-    threading.Thread(target=_worker, name=f"TCA-bg-{job_id}", daemon=True).start()
+    threading.Thread(target=_worker, name=f"Lorne-bg-{job_id}", daemon=True).start()
     return job_id
 
 

@@ -1,7 +1,7 @@
 """
 Custom Tools — загрузка, управление и регистрация пользовательских инструментов.
 
-Пользователь может создавать Python-файлы с @tool-функциями в ~/.tca_custom_tools/.
+Пользователь может создавать Python-файлы с @tool-функциями в ``~/.lorne_custom_tools`` (или legacy ``~/.tca_custom_tools``).
 Они автоматически загружаются при старте и доступны агенту.
 """
 from __future__ import annotations
@@ -15,8 +15,10 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import BaseTool
 
+from Agent.runtime_paths import custom_tools_dir
+
 # ─── Хранилище ──────────────────────────────────────────────────────
-CUSTOM_TOOLS_DIR = Path.home() / ".tca_custom_tools"
+CUSTOM_TOOLS_DIR = custom_tools_dir()
 
 _TEMPLATE = '''"""
 Custom tool: {name}
@@ -41,7 +43,7 @@ def _ensure_dir() -> None:
 
 
 def load_custom_tools() -> List[BaseTool]:
-    """Сканирует ~/.tca_custom_tools/, загружает все @tool-декорированные функции.
+    """Сканирует каталог кастомных тулов, загружает все @tool-декорированные функции.
 
     Returns:
         Список BaseTool-объектов, готовых к использованию агентом.

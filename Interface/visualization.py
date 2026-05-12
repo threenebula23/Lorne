@@ -1,17 +1,18 @@
 """
-Красивый терминальный вывод для TCA агента — вдохновлён Claude Code.
-Использует `rich` для панелей, подсветки синтаксиса, спиннеров, Markdown, прогресс-баров.
-Если rich не установлен, используется plain ANSI.
+Красивый терминальный вывод для агента Lorne (classic CLI) — вдохновлён Claude Code.
+
+Использует ``rich`` для панелей, подсветки, Markdown и прогресса; без Rich — plain ANSI.
 """
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
-    from rich.console import Console
+    from rich.console import Console, Group
     from rich.panel import Panel
     from rich.syntax import Syntax
     from rich.markdown import Markdown as RichMarkdown
@@ -29,29 +30,133 @@ try:
 except ImportError:
     HAS_RICH = False
 
-_theme = Theme({
-    "info": "#A78BFA",
-    "success": "bold #10B981",
-    "warning": "bold #F59E0B",
-    "error": "bold #EF4444",
-    "tool": "bold #8B5CF6",
-    "dim": "#6B7280",
-    "accent": "bold #8B5CF6",
-    "header": "bold #E5E7EB on #1a1a2e",
-}) if HAS_RICH else None
-
-console = Console(theme=_theme, highlight=False) if HAS_RICH else None
-
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-CYAN = "\033[38;2;167;139;250m"   # #A78BFA purple-light
-GREEN = "\033[38;2;16;185;129m"   # #10B981
-YELLOW = "\033[38;2;245;158;11m"  # #F59E0B
-MAGENTA = "\033[38;2;139;92;246m" # #8B5CF6
-BLUE = "\033[38;2;139;92;246m"    # #8B5CF6 (purple as primary)
-RED = "\033[38;2;239;68;68m"      # #EF4444
-WHITE = "\033[38;2;229;231;235m"  # #E5E7EB
+CYAN = "\033[38;2;167;139;250m"
+GREEN = "\033[38;2;16;185;129m"
+YELLOW = "\033[38;2;245;158;11m"
+MAGENTA = "\033[38;2;139;92;246m"
+BLUE = "\033[38;2;139;92;246m"
+RED = "\033[38;2;239;68;68m"
+WHITE = "\033[38;2;229;231;235m"
+
+_CLI_PALETTE: Dict[str, str] = {}
+_cli_style_sig: str = ""
+
+if HAS_RICH:
+    console = Console(highlight=False)
+    _console_err = Console(highlight=False, stderr=True)
+else:
+    console = None  # type: ignore[misc, assignment]
+    _console_err = None  # type: ignore[misc, assignment]
+
+try:
+    from Interface.branding import (
+        APP_CLI_SUBTITLE,
+        APP_DISPLAY_NAME,
+        APP_FULL_VERSION_LABEL,
+        APP_VERSION,
+        cli_attractor_block,
+    )
+except ImportError:
+    APP_DISPLAY_NAME = "Lorne"
+    APP_VERSION = "0.98"
+    APP_FULL_VERSION_LABEL = f"v{APP_VERSION}"
+    APP_CLI_SUBTITLE = "Terminal coding assistant"
+
+    def cli_attractor_block() -> str:
+        return "\n".join(("    ·   ", "   ··   ", "  ···   "))
+
+
+def _hex_to_ansi24(hex_color: str) -> str:
+    h = (hex_color or "").strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return "\033[0m"
+    try:
+        r = int(h[0:2], 16)
+        g = int(h[2:4], 16)
+        b = int(h[4:6], 16)
+        return f"\033[38;2;{r};{g};{b}m"
+    except ValueError:
+        return "\033[0m"
+
+
+def refresh_cli_ui_from_prefs(force: bool = False) -> None:
+    """Перечитать cli_theme и cli_accent_color; обновить Rich Console и ANSI для plain-режима."""
+    global console, CYAN, MAGENTA, BLUE, GREEN, YELLOW, RED, WHITE, _CLI_PALETTE, _cli_style_sig  # noqa: PLW0603
+    try:
+        from Interface.cli_theme import (
+            DEFAULT_CLI_THEME_ID,
+            cli_palette,
+            resolve_cli_theme_name,
+        )
+        from Interface.ui_prefs import load_prefs
+
+        if force:
+            _cli_style_sig = ""
+
+        prefs = load_prefs()
+        tn = resolve_cli_theme_name(str(prefs.get("cli_theme") or DEFAULT_CLI_THEME_ID))
+        ac = str(prefs.get("cli_accent_color") or "").strip()
+        sig = f"{tn}|{ac}"
+        if sig == _cli_style_sig and _CLI_PALETTE and not force:
+            return
+        _cli_style_sig = sig
+        _CLI_PALETTE = cli_palette(tn, ac)
+        pal = _CLI_PALETTE
+        CYAN = _hex_to_ansi24(pal.get("accent2", "#A78BFA"))
+        MAGENTA = _hex_to_ansi24(pal.get("accent", "#8B5CF6"))
+        BLUE = MAGENTA
+        GREEN = _hex_to_ansi24(pal.get("green", "#10B981"))
+        YELLOW = _hex_to_ansi24(pal.get("yellow", "#F59E0B"))
+        RED = _hex_to_ansi24(pal.get("red", "#EF4444"))
+        WHITE = _hex_to_ansi24(pal.get("fg", "#E5E7EB"))
+        if HAS_RICH:
+            rich_theme = Theme(
+                {
+                    "info": pal["accent2"],
+                    "success": f"bold {pal['green']}",
+                    "warning": f"bold {pal['yellow']}",
+                    "error": f"bold {pal['red']}",
+                    "tool": f"bold {pal['accent']}",
+                    "dim": pal["fg2"],
+                    "accent": f"bold {pal['accent']}",
+                    "header": f"bold {pal['fg']} on {pal['bg3']}",
+                    "cmd": f"bold {pal['accent']}",
+                    "cyan": pal.get("cyan", pal["accent2"]),
+                    "blue": pal.get("blue", pal["accent"]),
+                    "magenta": pal["accent"],
+                    "step": pal["accent2"],
+                    "rule": pal["accent"],
+                    "border": pal["border"],
+                    "muted": pal["fg2"],
+                    "panel.border": pal["border"],
+                }
+            )
+            console = Console(theme=rich_theme, highlight=False)
+    except Exception:
+        pass
+
+
+def _cli_p() -> Dict[str, str]:
+    try:
+        refresh_cli_ui_from_prefs()
+    except Exception:
+        pass
+    if _CLI_PALETTE:
+        return _CLI_PALETTE
+    from Interface.cli_theme import DEFAULT_CLI_THEME_ID, cli_palette
+
+    return cli_palette(DEFAULT_CLI_THEME_ID, "")
+
+
+try:
+    refresh_cli_ui_from_prefs()
+except Exception:
+    pass
 
 # ─── Лимиты контекста по моделям ──────────────────────────────────
 # Built dynamically from AVAILABLE_MODELS in llm_provider to avoid
@@ -124,6 +229,66 @@ def _truncate(text: str, max_len: int = 300) -> str:
     return text[:max_len] + "…"
 
 
+# CLI progress footer (round + plan step) — updated from round_header / plan_tool results.
+_CLI_PROGRESS: Dict[str, Any] = {"round": 0, "step": None, "total": None, "title": ""}
+
+
+def _emit_cli_progress_footer() -> None:
+    if not HAS_RICH:
+        return
+    bridge = _get_tui_bridge()
+    if bridge:
+        r = int(_CLI_PROGRESS.get("round") or 0)
+        si = _CLI_PROGRESS.get("step")
+        st = _CLI_PROGRESS.get("total")
+        ti = str(_CLI_PROGRESS.get("title") or "")
+        parts = [f"Раунд {r}"]
+        if si is not None:
+            tot = f"/{st}" if st is not None else ""
+            parts.append(f"шаг {si}{tot}")
+        if ti:
+            parts.append(ti[:56] + ("…" if len(ti) > 56 else ""))
+        bridge.on_info(" · ".join(parts))
+        return
+
+    r = int(_CLI_PROGRESS.get("round") or 0)
+    si = _CLI_PROGRESS.get("step")
+    st = _CLI_PROGRESS.get("total")
+    ti = str(_CLI_PROGRESS.get("title") or "")
+    pal = _cli_p()
+    line = Text()
+    line.append("Раунд ", style="bold")
+    line.append(str(r), style="bold cyan")
+    if si is not None:
+        line.append("    Шаг ", style="bold")
+        tot = f"/{st}" if st is not None else ""
+        line.append(f"{si}{tot}", style="bold yellow")
+    if ti:
+        line.append("    ", style="")
+        line.append((ti[:52] + "…") if len(ti) > 52 else ti, style="dim")
+    console.print(
+        Panel(
+            line,
+            title="[bold]Прогресс[/bold]",
+            title_align="left",
+            border_style=pal.get("accent2", pal.get("accent", "magenta")),
+            box=box.HEAVY,
+            padding=(0, 1),
+        )
+    )
+
+
+def set_cli_progress_round(n: int) -> None:
+    _CLI_PROGRESS["round"] = int(n)
+
+
+def set_cli_progress_plan_step(step: Optional[int], total: Optional[int] = None, title: str = "") -> None:
+    _CLI_PROGRESS["step"] = step
+    _CLI_PROGRESS["total"] = total
+    if title:
+        _CLI_PROGRESS["title"] = title
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  PUBLIC API
 # ═══════════════════════════════════════════════════════════════════
@@ -135,7 +300,7 @@ def section(title: str, char: str = "═") -> None:
         return
     if HAS_RICH:
         console.print()
-        console.print(Rule(f"[bold]{title}[/bold]", style="blue"))
+        console.print(Rule(f"[bold]{title}[/bold]", style=_cli_p()["accent"]))
         console.print()
     else:
         line = char * min(60, len(title) + 6)
@@ -146,7 +311,7 @@ def section(title: str, char: str = "═") -> None:
 
 def step(num: int, title: str, detail: str = "") -> None:
     if HAS_RICH:
-        marker = f"[cyan]●[/cyan] [bold]Шаг {num}[/bold]: {title}"
+        marker = f"[step]●[/step] [bold]Шаг {num}[/bold]: {title}"
         if detail:
             marker += f"  [dim]{detail}[/dim]"
         console.print(marker)
@@ -157,19 +322,24 @@ def step(num: int, title: str, detail: str = "") -> None:
 
 
 def round_header(round_num: int) -> None:
+    set_cli_progress_round(round_num)
     bridge = _get_tui_bridge()
     if bridge:
         bridge.on_separator(f"Round {round_num}")
         return
     if HAS_RICH:
         console.print()
+        _rh = _cli_p()
+        rn = max(1, int(round_num))
         console.print(
             Panel(
-                f"[bold white]Раунд {round_num}[/bold white]",
-                style="blue",
-                box=box.DOUBLE,
-                expand=False,
-                padding=(0, 3),
+                f"[bold white] {rn} [/bold white]",
+                title="[bold]Раунд[/bold]",
+                title_align="center",
+                border_style=_rh["accent"],
+                box=box.HEAVY,
+                padding=(0, 2),
+                width=16,
             )
         )
     else:
@@ -183,6 +353,14 @@ def display_agent_action(step_num: int, name: str, args: Dict[str, Any]) -> None
     if bridge:
         return
 
+    if name == "plan_tool" and isinstance(args, dict):
+        args = dict(args)
+        sj = args.get("steps_json")
+        if isinstance(sj, str) and len(sj) > 120:
+            args["steps_json"] = f"<{len(sj)} симв.>"
+        elif sj is not None and not isinstance(sj, str):
+            args["steps_json"] = f"<{len(str(sj))} симв.>"
+
     short_args = {}
     for k, v in args.items():
         if k in ("new_str", "code", "snippet", "content") and isinstance(v, str):
@@ -195,6 +373,7 @@ def display_agent_action(step_num: int, name: str, args: Dict[str, Any]) -> None
 
     if HAS_RICH:
         args_str = json.dumps(short_args, ensure_ascii=False, indent=2)
+        _aa = _cli_p()
         tool_text = Text()
         tool_text.append("⚡ ", style="yellow")
         tool_text.append(name, style="bold magenta")
@@ -205,7 +384,7 @@ def display_agent_action(step_num: int, name: str, args: Dict[str, Any]) -> None
                 panel_content,
                 title=tool_text,
                 title_align="left",
-                border_style="magenta",
+                border_style=_aa["accent"],
                 box=box.ROUNDED,
                 padding=(0, 1),
             )
@@ -235,6 +414,14 @@ def display_tool_result(step_num: int, name: str, result: Any) -> None:
         _display_read_file_result(result)
         return
 
+    if name == "read_file_lines" and isinstance(result, dict):
+        _display_read_file_lines_result(result)
+        return
+
+    if name == "run_package_script" and isinstance(result, dict):
+        _display_package_script_result(result)
+        return
+
     if name == "run_command" and isinstance(result, dict):
         _display_command_result(result)
         return
@@ -249,6 +436,10 @@ def display_tool_result(step_num: int, name: str, result: Any) -> None:
 
     if name == "search_in_files" and isinstance(result, dict):
         _display_search_result(result)
+        return
+
+    if name == "find_in_file" and isinstance(result, dict):
+        _display_find_in_file_result(result)
         return
 
     if HAS_RICH:
@@ -279,7 +470,28 @@ def _display_plan_result(name: str, result: Any) -> None:
             if result.get("ok"):
                 status = result.get("status", "")
                 icon = {"completed": "✓", "in_progress": "▶", "blocked": "⚠", "pending": "○"}.get(status, "●")
-                console.print(f"  [info]{icon} Шаг {result.get('step_index')} → {status}[/info]")
+                si = result.get("step_index")
+                note = (result.get("note") or "").strip()
+                set_cli_progress_plan_step(
+                    int(si) if si is not None else None,
+                    None,
+                    note[:80] if note else f"статус: {status}",
+                )
+                pal = _cli_p()
+                line = f"[bold]{icon} План · шаг {si}[/bold] → [yellow]{status}[/yellow]"
+                if note:
+                    line += f"\n[dim]{note}[/dim]"
+                console.print(
+                    Panel(
+                        line,
+                        title="[bold]План[/bold]",
+                        title_align="left",
+                        border_style=pal["accent"],
+                        box=box.HEAVY,
+                        padding=(0, 1),
+                    )
+                )
+                _emit_cli_progress_footer()
             else:
                 console.print(f"  [warning]Ошибка плана: {result.get('error')}[/warning]")
         elif name == "load_plan":
@@ -287,6 +499,13 @@ def _display_plan_result(name: str, result: Any) -> None:
             if not result.get("ok"):
                 console.print("  [dim]Нет активного плана[/dim]")
                 return
+            steps = plan.get("steps") or []
+            if isinstance(steps, list) and steps:
+                set_cli_progress_plan_step(
+                    None,
+                    len(steps),
+                    str(plan.get("title", ""))[:80],
+                )
             table = Table(title=plan.get("title", "План"), box=box.SIMPLE, show_header=False, padding=(0, 1))
             table.add_column("Статус", width=3)
             table.add_column("Шаг")
@@ -295,6 +514,7 @@ def _display_plan_result(name: str, result: Any) -> None:
                 icon = {"completed": "[green]✓[/green]", "in_progress": "[yellow]▶[/yellow]", "blocked": "[red]⚠[/red]"}.get(status, "[dim]○[/dim]")
                 table.add_row(icon, s.get("text", ""))
             console.print(table)
+            _emit_cli_progress_footer()
         elif name == "clear_plan":
             if result.get("ok"):
                 console.print("  [success]✓ План очищен[/success]")
@@ -343,12 +563,13 @@ def _display_read_file_result(result: Dict[str, Any]) -> None:
             }.get(_syn, "monokai")
         except Exception:
             pass
+        _pv = _cli_p()
         console.print(
             Panel(
                 Syntax(preview, lang, theme=syntax_theme, line_numbers=True, word_wrap=True),
                 title=f"[bold]{short}[/bold] [dim]({total} строк)[/dim]",
                 title_align="left",
-                border_style="cyan",
+                border_style=_pv["cyan"],
                 box=box.ROUNDED,
                 padding=(0, 0),
             )
@@ -357,13 +578,107 @@ def _display_read_file_result(result: Dict[str, Any]) -> None:
         print(f"   {DIM}Прочитано: {_short_path(path)}  ({total} строк){RESET}")
 
 
+def _display_read_file_lines_result(result: Dict[str, Any]) -> None:
+    path = result.get("file_path", "") or result.get("path", "")
+    content = result.get("content", "")
+    total = int(result.get("total_lines") or 0)
+    show = result.get("showing") or ""
+    if result.get("error"):
+        if HAS_RICH:
+            console.print(f"  [red]read_file_lines: {result.get('error')}[/red]  {_short_path(path)}")
+        return
+
+    if HAS_RICH:
+        short = _short_path(path)
+        lang = _detect_language(path)
+        preview = content[:4000] if len(content) > 4000 else content
+        if preview != content:
+            preview += "\n… (обрезано)"
+        syntax_theme = "monokai"
+        try:
+            from Interface.ui_prefs import load_prefs
+
+            _syn = str(load_prefs().get("syntax_theme", "monokai"))
+            syntax_theme = {
+                "monokai": "monokai",
+                "dracula": "dracula",
+                "github_dark": "github-dark",
+            }.get(_syn, "monokai")
+        except Exception:
+            pass
+        _pv = _cli_p()
+        sub = f"{total} строк в файле"
+        if show:
+            sub += f" · {show}"
+        console.print(
+            Panel(
+                Syntax(preview, lang, theme=syntax_theme, line_numbers=True, word_wrap=True),
+                title=f"[bold]{short}[/bold] [dim](read_file_lines)[/dim]",
+                subtitle=f"[dim]{sub}[/dim]",
+                title_align="left",
+                border_style=_pv["cyan"],
+                box=box.ROUNDED,
+                padding=(0, 0),
+            )
+        )
+    else:
+        print(f"   {DIM}{_short_path(path)}  {show}{RESET}")
+
+
+def _display_package_script_result(result: Dict[str, Any]) -> None:
+    if not HAS_RICH:
+        rc = result.get("returncode", -1)
+        print(f"   script: {result.get('script')} rc={rc}")
+        return
+    pal = _cli_p()
+    ok = bool(result.get("ok"))
+    rc = result.get("returncode", -1)
+    st = "успех" if ok else "ошибка"
+    out = (result.get("stdout") or "")[:3500]
+    err = (result.get("stderr") or "")[:2500]
+    chunks: List[str] = []
+    if out.strip():
+        chunks.append(out + ("\n" if len((result.get("stdout") or "")) > 3500 else ""))
+    if err.strip():
+        chunks.append(f"[red]{err}[/red]")
+    body = "\n".join(chunks) if chunks else "[dim](нет вывода)[/dim]"
+    style = pal.get("green", "green") if ok else "red"
+    console.print(
+        Panel(
+            body,
+            title=f"[bold]{result.get('package_manager', 'npm')} run {result.get('script', '?')}[/bold]  [{st} · exit {rc}]",
+            title_align="left",
+            border_style=style,
+            box=box.ROUNDED,
+            padding=(0, 1),
+        )
+    )
+
+
 def _display_command_result(result: Dict[str, Any]) -> None:
     stdout = result.get("stdout", "")
     stderr = result.get("stderr", "")
     rc = result.get("returncode", -1)
     skipped = result.get("skipped", False)
+    background = bool(result.get("background"))
 
     if HAS_RICH:
+        if background and not skipped:
+            pal = _cli_p()
+            pid = result.get("pid", "")
+            logp = result.get("log_path", "")
+            msg = (result.get("stdout") or "").strip()
+            console.print(
+                Panel(
+                    f"{msg}\n[dim]pid={pid} · log: {logp}[/dim]",
+                    title="[bold]Фоновая команда[/bold]",
+                    title_align="left",
+                    border_style=pal.get("green", "green"),
+                    box=box.HEAVY,
+                    padding=(0, 1),
+                )
+            )
+            return
         if skipped:
             console.print(f"  [warning]⏭ Команда пропущена: {stderr.strip()}[/warning]")
             return
@@ -452,12 +767,13 @@ def _display_list_files_result(result: Dict[str, Any]) -> None:
             icon = "📁" if t == "dir" else "📄"
             items.append(f"{icon} {n}")
         cols = Columns(items, padding=(0, 3), equal=False)
+        _lv = _cli_p()
         console.print(
             Panel(
                 cols,
                 title=f"[bold]{_short_path(path)}[/bold] [dim]({len(entries)} элементов)[/dim]",
                 title_align="left",
-                border_style="cyan",
+                border_style=_lv["cyan"],
                 box=box.ROUNDED,
                 padding=(0, 1),
             )
@@ -492,6 +808,41 @@ def _display_search_result(result: Dict[str, Any]) -> None:
             print(f"     {m.get('file', '')}: строки {m.get('lines', [])[:5]}")
 
 
+def _display_find_in_file_result(result: Dict[str, Any]) -> None:
+    err = result.get("error")
+    if err:
+        if HAS_RICH:
+            console.print(f"  [warning]find_in_file: {err}[/warning] — {result.get('file_path', '')}")
+        else:
+            print(f"   find_in_file: {err}")
+        return
+    matches = result.get("matches", [])
+    pat = str(result.get("pattern", ""))[:80]
+    fp = _short_path(str(result.get("file_path", "")), 56)
+    if HAS_RICH:
+        if not matches:
+            console.print(f"  [dim]find_in_file: нет совпадений «{pat}» в {fp}[/dim]")
+            return
+        table = Table(
+            title=f"find_in_file «{pat}» · {fp}",
+            box=box.SIMPLE,
+            padding=(0, 1),
+        )
+        table.add_column("Стр.", style="dim", justify="right")
+        table.add_column("Текст", style="default")
+        for m in matches[:40]:
+            ln = m.get("line", "")
+            tx = _truncate(str(m.get("text", "")), 200)
+            table.add_row(str(ln), tx)
+        console.print(table)
+        if result.get("truncated"):
+            console.print("  [dim]… обрезано по max_matches[/dim]")
+    else:
+        print(f"   find_in_file: {fp} — {len(matches)} совпад.")
+        for m in matches[:20]:
+            print(f"     L{m.get('line', '')}: {_truncate(str(m.get('text', '')), 120)}")
+
+
 def display_model_reply(step_num: int, content: str, response_metadata: Optional[Dict[str, Any]] = None) -> None:
     if not content or not content.strip():
         return
@@ -506,6 +857,8 @@ def display_model_reply(step_num: int, content: str, response_metadata: Optional
         return
 
     if HAS_RICH:
+        _mr = _cli_p()
+        _gborder = _mr.get("green", "green")
         try:
             md = RichMarkdown(clean_content)
             console.print(
@@ -513,7 +866,7 @@ def display_model_reply(step_num: int, content: str, response_metadata: Optional
                     md,
                     title="[bold white]Ассистент[/bold white]",
                     title_align="left",
-                    border_style="green",
+                    border_style=_gborder,
                     box=box.ROUNDED,
                     padding=(1, 2),
                 )
@@ -524,7 +877,7 @@ def display_model_reply(step_num: int, content: str, response_metadata: Optional
                     content.strip()[:3000],
                     title="[bold white]Ассистент[/bold white]",
                     title_align="left",
-                    border_style="green",
+                    border_style=_gborder,
                     box=box.ROUNDED,
                     padding=(1, 2),
                 )
@@ -679,39 +1032,110 @@ def display_cumulative_usage(
 
 # ─── Хелперы для основного цикла агента ────────────────────────────
 
-def print_welcome(model_name: str, profile: str, project_name: str, balance: str = "") -> None:
+def _cli_hex_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = (hex_color or "").strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return (139, 92, 246)
+    try:
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    except ValueError:
+        return (139, 92, 246)
+
+
+def print_startup_banner(
+    model_name: str,
+    profile: str,
+    project_name: str,
+    balance: str = "",
+    mode_label: str = "Classic CLI",
+    version: str = APP_VERSION,
+) -> None:
+    """Стартовый баннер classic CLI: аттрактор слева, figlet имени, метаданные сессии."""
     bridge = _get_tui_bridge()
     if bridge:
-        bridge.on_info(f"TCA — {model_name} ({profile}) | Project: {project_name}")
+        bridge.on_info(
+            f"{APP_DISPLAY_NAME} — {model_name} ({profile}) | Project: {project_name}",
+        )
         if balance:
             bridge.on_info(f"Balance: {balance}")
         return
-    balance_line = f"\n  [dim]Баланс:[/dim]  [bold green]{balance}[/bold green]" if balance else ""
-    balance_plain = f"\n  Баланс:  {balance}" if balance else ""
-    if HAS_RICH:
+
+    _bc = _cli_p()
+    logo_block: Any = ""
+    try:
+        from pyfiglet import figlet_format
+
+        raw = figlet_format(APP_DISPLAY_NAME, font="slant")
+        logo_lines = Text()
+        lines = raw.splitlines()
+        n = max(1, len(lines))
+        r1, g1, b1 = _cli_hex_rgb(_bc["accent"])
+        r2, g2, b2 = _cli_hex_rgb(_bc["accent2"])
+        for i, line in enumerate(lines):
+            t = (i + 1) / float(n)
+            rr = int(r1 + (r2 - r1) * t)
+            gg = int(g1 + (g2 - g1) * t)
+            bb = int(b1 + (b2 - b1) * t)
+            logo_lines.append(line + "\n", style=f"bold rgb({rr},{gg},{bb})")
+        logo_block = logo_lines
+    except Exception:
+        logo_block = Text(f"  {APP_DISPLAY_NAME}\n", style=f"bold {_bc['accent']}")
+
+    attractor = Text(cli_attractor_block() + "\n", style=f"bold {_bc['accent2']}")
+
+    sub = Text()
+    sub.append(f"  {APP_CLI_SUBTITLE}", style=f"bold {_bc['accent2']}")
+    sub.append(f"  {APP_FULL_VERSION_LABEL}\n", style=_bc["fg2"])
+    sub.append("  " + "─" * 28 + "\n", style=_bc["border"])
+
+    meta = Text()
+    meta.append("  Модель:   ", style="dim")
+    meta.append(f"{model_name}\n", style=f"bold {_bc['accent']}")
+    meta.append("  Профиль: ", style="dim")
+    meta.append(f"{profile}\n", style=f"bold {_bc['fg']}")
+    meta.append("  Проект:  ", style="dim")
+    meta.append(f"{project_name}\n", style=f"bold {_bc['fg']}")
+    if balance:
+        meta.append("  Баланс:  ", style="dim")
+        meta.append(f"{balance}\n", style=f"bold {_bc['green']}")
+    meta.append("  Режим:   ", style="dim")
+    meta.append(f"{mode_label}\n", style=f"bold {_bc['cyan']}")
+    meta.append("  Подсказка: ", style="dim")
+    meta.append("@file автодополнение, /help команды\n", style=_bc["fg"])
+
+    if HAS_RICH and console:
+        from rich.console import Group
+
+        logo_row = Columns([attractor, logo_block], padding=(0, 2), expand=False)
+        inner = Group(logo_row, sub, meta)
         console.print()
         console.print(
             Panel(
-                f"[bold white]TCA — Терминальный Ассистент Кодинга[/bold white]\n\n"
-                f"  [dim]Модель:[/dim]   [bold]{model_name}[/bold]\n"
-                f"  [dim]Профиль:[/dim] [bold]{profile}[/bold]\n"
-                f"  [dim]Проект:[/dim]  [bold]{project_name}[/bold]"
-                f"{balance_line}",
-                border_style="#8B5CF6",
-                box=box.DOUBLE,
-                padding=(1, 3),
+                inner,
+                border_style=_bc["border"],
+                box=box.HEAVY,
+                padding=(1, 2),
             )
         )
         console.print()
     else:
         print(f"\n{'═' * 50}")
-        print(f"  TCA — Терминальный Ассистент Кодинга")
+        print(cli_attractor_block())
+        print(f"  {APP_DISPLAY_NAME} — {APP_CLI_SUBTITLE} {APP_FULL_VERSION_LABEL}")
         print(f"  Модель:   {model_name}")
         print(f"  Профиль:  {profile}")
         print(f"  Проект:   {project_name}")
         if balance:
             print(f"  Баланс:  {balance}")
+        print(f"  Режим:    {mode_label}")
         print(f"{'═' * 50}\n")
+
+
+def print_welcome(model_name: str, profile: str, project_name: str, balance: str = "") -> None:
+    """Обратная совместимость: тот же вид, что стартовый баннер (без дублирования логики)."""
+    print_startup_banner(model_name, profile, project_name, balance=balance, mode_label="Classic CLI")
 
 
 def display_shell_command(command: str) -> None:
@@ -721,15 +1145,16 @@ def display_shell_command(command: str) -> None:
         bridge.on_action("shell", command)
         return
     if HAS_RICH:
+        _sh = _cli_p()
         console.print(
             Panel(
                 Text.assemble(
-                    ("❯ ", "bold bright_green"),
+                    ("❯ ", f"bold {_sh['green']}"),
                     (command, "bold white"),
                 ),
-                title="[bold bright_green]  Terminal [/bold bright_green]",
+                title=f"[bold {_sh['green']}]  Terminal [/bold {_sh['green']}]",
                 title_align="left",
-                border_style="bright_green",
+                border_style=_sh["green"],
                 box=box.HEAVY,
                 padding=(0, 1),
             )
@@ -762,9 +1187,10 @@ def display_model_selector(models: list, current_model: str) -> None:
         "pro":   ("👑", "Про",        "cyan"),
     }
 
+    _tp = _cli_p()
     table = Table(
         box=box.ROUNDED,
-        border_style="#8B5CF6",
+        border_style=_tp["accent"],
         padding=(0, 1),
         title="[bold white]  Выбор модели [/bold white]",
         caption="[dim]Введи номер модели, или [bold]/model <id>[/bold] для произвольной[/dim]",
@@ -825,6 +1251,7 @@ def display_status_panel(
     bar = f"[{bar_color}]{'█' * filled}{'░' * (bar_len - filled)}[/{bar_color}] [dim]{pct}%[/dim]"
 
     model_link = f"[link=https://openrouter.ai/models/{model_name}]{model_name}[/link]"
+    _sp = _cli_p()
 
     content = (
         f"  [dim]Модель:[/dim]    [bold cyan]{model_link}[/bold cyan]\n"
@@ -842,7 +1269,7 @@ def display_status_panel(
         Panel(
             content,
             title="[bold]  Статус сессии [/bold]",
-            border_style="#8B5CF6",
+            border_style=_sp["accent"],
             box=box.ROUNDED,
             padding=(1, 2),
         )
@@ -850,53 +1277,459 @@ def display_status_panel(
 
 
 _HELP_CATEGORIES = [
-    ("💬 Чат", [
-        ("Enter", "Продолжить (следующий шаг)"),
-        ("!<команда>", "Выполнить команду в терминале"),
-    ]),
-    ("🤖 Модель", [
-        ("/model", "Выбрать модель (сохраняется)"),
-        ("/profile [имя]", "fast / balanced / quality"),
-        ("/balance", "Баланс OpenRouter"),
-    ]),
-    ("📁 Проект", [
-        ("/ls [путь]", "Список файлов"),
-        ("/tree [путь]", "Дерево проекта"),
-        ("/rag <запрос>", "Поиск по проекту (RAG)"),
-        ("/plan", "Текущий план задачи"),
-        ("/status", "Статус сессии"),
-    ]),
-    ("🔄 История", [
-        ("/versions <файл>", "Версии файла (SQLite)"),
-        ("/rollback <файл>", "Откатить файл (SQLite)"),
-        ("/git log [файл]", "История Git-коммитов"),
-        ("/git diff [хеш]", "Показать Git-diff"),
-        ("/git rollback <хеш>", "Откатить Git-коммит"),
-        ("/git status", "Статус Git"),
-        ("/compact", "Сжать контекст"),
-    ]),
-    ("🔧 Custom Tools", [
-        ("/custom", "Список кастомных тулов"),
-        ("/custom add <имя>", "Добавить свой тул"),
-        ("/custom remove <имя>", "Удалить тул"),
-        ("/custom reload", "Перезагрузить тулы"),
-    ]),
-    ("⚡ Creator Mode", [
-        ("/creator", "Включить creator mode"),
-        ("/creator <задача>", "Запустить задачу в creator mode"),
-        ("/creator config", "Конфигурация creator"),
-        ("/creator set <key> <val>", "Изменить настройку"),
-        ("/creator off", "Выключить creator mode"),
-    ]),
-    ("⚙️  Система", [
-        ("/agent list|use", "Управление под-агентами"),
+    ("Базовые", [
         ("/help", "Эта справка"),
-        ("/exit", "Выход"),
+        ("/exit", "Выход из Lorne"),
+        ("/status", "Статус сессии: модель, сообщения, RAG"),
+        ("/compact", "Сжать историю для экономии контекста"),
+        ("!<shell-command>", "Выполнить shell-команду напрямую"),
+    ]),
+    ("Модели", [
+        ("/model", "Выбор модели: номер из списка или /model <id>"),
+        ("/model <id>", "Установить модель по ID (OpenRouter и др.)"),
+        ("/profile [fast|balanced|quality]", "Профиль: температура и лимиты токенов"),
+        ("/balance", "Баланс OpenRouter"),
+        ("/credits", "То же, что /balance"),
+    ]),
+    ("Проект/навигация", [
+        ("/ls [path]", "Список файлов в каталоге"),
+        ("/tree [path]", "Дерево проекта"),
+        ("/rag <query>", "Семантический поиск по проекту (RAG)"),
+        ("/plan", "Показать текущий план задачи"),
+    ]),
+    ("Git", [
+        ("/git status", "Статус репозитория"),
+        ("/git log [path]", "История коммитов (опционально по файлу)"),
+        ("/git diff [hash]", "Diff текущих изменений или коммита"),
+        ("/git rollback <hash>", "Откатить коммит (revert)"),
+        ("/git branch", "Текущая ветка"),
+    ]),
+    ("Версии/история", [
+        ("/versions <file>", "История версий файла (SQLite)"),
+        ("/rollback <file> [version_id]", "Откатить файл к версии из SQLite"),
+    ]),
+    ("Custom tools", [
+        ("/custom", "Список кастомных инструментов"),
+        ("/custom list", "То же, что /custom"),
+        ("/custom add <name>", "Добавить свой тул (код вводится после команды)"),
+        ("/custom remove <name>", "Удалить кастомный тул"),
+        ("/custom reload", "Перезагрузить кастомные тулы"),
+    ]),
+    ("Creator", [
+        ("/creator", "Включить Creator mode (как /creator on)"),
+        ("/creator on|off", "Включить или выключить Creator mode"),
+        ("/creator config", "Показать конфигурацию Creator"),
+        ("/creator set <local_model|local_base_url|max_workers|orchestration> <value>", "Изменить параметр Creator"),
+        ("/creator <task>", "Запустить задачу в Creator mode"),
+    ]),
+    ("Research", [
+        ("/research on|off|status", "Включить/выключить или статус Research mode"),
+        ("/research <query>", "Исследование по теме (веб + источники)"),
+    ]),
+    ("Deep", [
+        ("/deep", "Режим Deep Solver (как /deepmode)"),
+        ("/deep <запрос>", "Сразу цель Deep (режим deep + запуск с этой задачей)"),
+        ("/deepmode", "Включить режим Deep Solver (локальный долгий цикл)"),
+        ("/mode deep", "То же через /mode"),
+        ("/deepcp list", "Список активных Deep checkpoint"),
+        ("/deepcp rollback <checkpoint_id>", "Откат к checkpoint Deep Solver"),
+        ("/deepcp continue <checkpoint_id>", "Продолжить от checkpoint"),
+        ("/stop", "Остановить текущее выполнение агента"),
+    ]),
+    ("Ollama", [
+        ("/model ollama", "Выбор модели: список с сервера → номер или тег; см. /ollama pick"),
+        ("/model ollama/<тег>", "Сразу активировать модель, напр. ollama/llama3.2:latest"),
+        ("/ollama pick", "То же интерактивное меню выбора модели"),
+        ("/ollama [help]", "Список подкоманд (то же без аргумента)"),
+        ("/ollama status", "Какие модели сейчас загружены в память (running)"),
+        ("/ollama list", "Все теги моделей с сервера + заявленный ctx"),
+        ("/ollama refresh", "Перезапросить список с сервера"),
+        ("/ollama set-url <url>", "OpenAI-совместимый base URL (часто …/v1), пишется в .lorne/ui_settings.json (или legacy .tca)."),
+        ("/ollama set-key <key>", "Bearer/API-ключ для прокси; пустая строка сбрасывает"),
+        ("/ollama add-model <name> [ctx]", "Добавить модель в локальный список выбора; ctx — контекст по умолчанию"),
+        ("/ollama remove-model <name>", "Убрать из списка и очистить model-set для неё"),
+        ("/ollama preset-list", "Имена пресетов из ollama_presets (по умолчанию есть default)"),
+        ("/ollama preset-set <model> <preset>", "Скопировать все поля пресета в настройки модели"),
+        ("/ollama model-set <model> <k=v,...>", "Точечно: см. блок «Подробнее» при /help ollama"),
+    ]),
+    ("Персонализация", [
+        ("/theme [list]", "Список тем CLI или /theme <id>: purple, void, ice, matrix, paper, …"),
+        ("/accent <аргумент>", "Основной акцент CLI → cli_accent_color (#hex или F1–F8)"),
     ]),
 ]
 
 
+# Совпадает с Agent.command_router.CommandRouter._handle_accent (ansi_map).
+_ACCENT_F_PRESETS: List[tuple[str, str, str]] = [
+    ("F1", "#8B5CF6", "фиолетовый"),
+    ("F2", "#10B981", "изумрудный"),
+    ("F3", "#F59E0B", "янтарный"),
+    ("F4", "#EF4444", "красный"),
+    ("F5", "#3B82F6", "синий"),
+    ("F6", "#A78BFA", "светло-фиолетовый"),
+    ("F7", "#22C55E", "зелёный"),
+    ("F8", "#F97316", "оранжевый"),
+]
+
+
+def _theme_accent_merged_detail_lines() -> List[str]:
+    """Единый текст для /help theme, /help accent и секции «Персонализация»."""
+    try:
+        from Interface.cli_theme import ALL_CLI_THEME_IDS
+    except Exception:
+        ALL_CLI_THEME_IDS = []
+
+    lines = [
+        "Тема CLI (/theme) и акцент (/accent) задаются отдельно от оформления Textual TUI.",
+        "В конфиге: короткий id в cli_theme и опционально cli_accent_color (.lorne/ui_settings.json или legacy .tca).",
+        "Старые имена из TUI (Purple Dark, Monokai, …) маппятся в ближайший CLI-пресет.",
+        "",
+        "Доступные id темы:",
+    ]
+    for name in ALL_CLI_THEME_IDS:
+        lines.append(f"  • {name}")
+    lines.extend([
+        "",
+        "/theme или /theme list — показать список; /theme <id> — применить пресет.",
+        "После смены темы обновляются рамки панелей, semantic-стили Rich (success/warning/error),",
+        "цвета cyan/blue/magenta в разметке и escape-последовательности в plain-режиме без Rich.",
+        "",
+        "/accent задаёт только основной акцент; secondary (accent2), границы и «характер» темы сохраняются.",
+        "",
+        "Быстрые пресеты /accent (регистр не важен):",
+    ])
+    for fk, hx, ru in _ACCENT_F_PRESETS:
+        lines.append(f"  {fk} → {hx}  ({ru})")
+    lines.extend([
+        "Также можно указать #RRGGBB или #RGB.",
+        "",
+        "Примеры:",
+        "  /theme ice",
+        "  /theme void",
+        "  /accent F2",
+        "  /accent #10B981",
+    ])
+    return lines
+
+
+def _ollama_help_detail_lines() -> List[str]:
+    return [
+        "Как выбрать модель Ollama в CLI:",
+        "  1) /model ollama  или  /ollama pick — таблица моделей (как у OpenRouter): номер, тег, ctx;",
+        "     затем введи номер строки или полный тег.",
+        "  2) /model ollama/имя:тег — сразу без меню (имя как в «ollama list» или /ollama list).",
+        "  3) /ollama list — только посмотреть теги; затем пункт 1 или 2.",
+        "После выбора модель добавляется в общий список /model и сохраняется в настройках.",
+        "",
+        "По умолчанию base URL: http://localhost:11434/v1 (меняется через /ollama set-url).",
+        "Ключ и URL пишутся в .lorne/ui_settings.json (ollama_base_url, ollama_api_key; legacy .tca).",
+        "",
+        "Пресеты (ollama_presets): в preset-list видны имена; у встроенного «default» поля:",
+        "  temperature, top_p, top_k, repeat_penalty, num_ctx, num_predict, stop",
+        "",
+        "/ollama model-set <модель> <список> — пары key=value через запятую, без пробелов вокруг «=».",
+        "Поддерживаемые ключи (как в роутере):",
+        "  float:  temperature, top_p, repeat_penalty",
+        "  int:    top_k, num_ctx, num_predict",
+        "  str:    stop, preset",
+        "",
+        "Примеры:",
+        "  /ollama set-url http://127.0.0.1:11434/v1",
+        "  /ollama add-model llama3.2:latest 8192",
+        "  /ollama model-set llama3.2:latest temperature=0.35,num_ctx=16384,top_p=0.9",
+        "  /ollama preset-set llama3.2:latest default",
+        "  /ollama remove-model llama3.2:latest",
+    ]
+
+
+def _canonical_section_key(name: str) -> str:
+    return " ".join(name.strip().lower().replace("/", " ").split())
+
+
+# Синонимы темы → имя секции из _HELP_CATEGORIES (латиница/транслит по смыслу).
+_SECTION_TOPIC_ALIASES: Dict[str, str] = {
+    "базовые": "Базовые",
+    "basic": "Базовые",
+    "модели": "Модели",
+    "модель": "Модели",
+    "model": "Модели",
+    "models": "Модели",
+    "проект": "Проект/навигация",
+    "навигация": "Проект/навигация",
+    "проект навигация": "Проект/навигация",
+    "navigation": "Проект/навигация",
+    "git": "Git",
+    "версии": "Версии/история",
+    "история": "Версии/история",
+    "версии история": "Версии/история",
+    "versions": "Версии/история",
+    "custom": "Custom tools",
+    "custom tools": "Custom tools",
+    "тулы": "Custom tools",
+    "кастом": "Custom tools",
+    "creator": "Creator",
+    "создатель": "Creator",
+    "research": "Research",
+    "исследование": "Research",
+    "исследования": "Research",
+    "deep": "Deep",
+    "глубоко": "Deep",
+    "checkpoint": "Deep",
+    "checkpoints": "Deep",
+    "deepcp": "Deep",
+    "ollama": "Ollama",
+    "персонализация": "Персонализация",
+    "тема": "Персонализация",
+    "theme": "Персонализация",
+}
+
+
+def _resolve_topic_to_help_section(topic: str) -> Optional[str]:
+    """Имя секции из _HELP_CATEGORIES или None. Узкие темы accent/acsent не сюда."""
+    t = _canonical_section_key(topic)
+    if not t:
+        return None
+    if t in _SECTION_TOPIC_ALIASES:
+        return _SECTION_TOPIC_ALIASES[t]
+    for cat_name, _ in _HELP_CATEGORIES:
+        if t == _canonical_section_key(cat_name):
+            return cat_name
+    return None
+
+
+def _help_section_detail_lines(section_name: str) -> List[str]:
+    """Подробный текст для /help <секция>."""
+    if section_name == "Ollama":
+        return _ollama_help_detail_lines()
+
+    sections: Dict[str, List[str]] = {
+        "Базовые": [
+            "Общие команды сессии и оболочки.",
+            "",
+            "/help [тема] — полный список или фильтр по слову; /help базовые, /help модели, …",
+            "Справка выводится одним блоком: таблица команд и раздел «подробнее» ниже разделителем.",
+            "/exit — выход из Lorne (сохранение зависит от режима).",
+            "/status — модель, профиль, лимит контекста, счётчики сообщений и при наличии — RAG.",
+            "/compact — сжать историю через compact_conversation (оставляет последние сообщения);",
+            "  полезно, когда контекст переполнен. После сжатия состояние может сохраниться.",
+            "!<cmd> — выполнить shell-команду в проекте (таймаут и безопасность — см. Terminal.runner).",
+        ],
+        "Модели": [
+            "Выбор LLM и профиля генерации (температура, лимиты токенов — через init_llm).",
+            "",
+            "/model — интерактивный выбор из списка или ввод номера;",
+            "/model <id> — прямой ID (OpenRouter, кастомные ID из настроек, Ollama после добавления).",
+            "/profile [fast|balanced|quality] — без аргумента показывает текущий и доступные профили;",
+            "  с аргументом переключает профиль и переинициализирует LLM.",
+            "/balance и /credits — баланс/кредиты OpenRouter (если провайдер это поддерживает);",
+            "  в CLI под текстом счёта показывается календарь расходов по дням (локальный лог .lorne/openrouter_usage.json или legacy .tca).",
+            "",
+            "Ollama: /model ollama или /model ollama/<тег> — см. /help ollama.",
+        ],
+        "Проект/навигация": [
+            "Просмотр файловой структуры и RAG по рабочей области.",
+            "",
+            "/ls [path] — плоский список файлов (по умолчанию «.»); путь относительно workspace.",
+            "/tree [path] — дерево каталогов через analyze_project_structure.",
+            "/rag <запрос> — семантический поиск по индексу (top_k≈10), затем краткая статистика индекса.",
+            "/plan — загрузить и показать текущий план задачи (plan_tool).",
+        ],
+        "Git": [
+            "Обёртка над репозиторием в cwd (нужны GitPython и инициализированный git).",
+            "",
+            "/git или /git status — ветка, чистота, списки changed / staged / untracked.",
+            "/git log [path] — последние коммиты (до ~15); path ограничивает лог по файлу.",
+            "/git diff [hash] — diff рабочей копии или с указанным коммитом (вывод усечён в терминале).",
+            "/git rollback <hash> — отмена коммита через git integration (revert-логика менеджера).",
+            "/git branch — имя текущей ветки.",
+            "",
+            "Если «Git не инициализирован» — git init в проекте или открой другой каталог.",
+        ],
+        "Версии/история": [
+            "Версии файлов в локальной SQLite (не путать с git).",
+            "",
+            "/versions <file> — запрос к агенту показать версии через инструмент list_file_versions.",
+            "/rollback <file> [version_id] — откат содержимого через rollback_file;",
+            "  пустой version_id может означать последнюю/подсказку от тула — см. сообщение роутера.",
+            "",
+            "Путь к файлу — относительно workspace.",
+        ],
+        "Custom tools": [
+            "Пользовательские инструменты (@tool), хранятся на диске и подмешиваются в агента.",
+            "",
+            "/custom или /custom list — таблица имён и описаний.",
+            "/custom add <name> — многострочный ввод кода (пустая строка завершает); можно шаблон по Enter.",
+            "/custom remove <name> — удалить файл тула и перезагрузить реестр.",
+            "/custom reload — перечитать кастомные тулы без перезапуска приложения.",
+            "",
+            "После изменений список tools в сессии обновляется (refresh_runtime_tools).",
+        ],
+        "Creator": [
+            "Режим параллельных под-агентов с локальной «тяжёлой» моделью (конфиг в creator_config).",
+            "",
+            "/creator или /creator on — включить creator_mode, переключить режим на creator, проверить сервер.",
+            "/creator off — выключить и вернуть режим в normal.",
+            "/creator config — локальная модель, base URL, воркеры, orchestration (parallel|sequential|…).",
+            "/creator set <ключ> <значение> — local_model, local_base_url, max_workers, orchestration;",
+            "  orchestration: parallel | sequential | supervisor | hierarchical.",
+            "/creator <текст> — одна строка задачи: run_creator_mode, итог в чат и сохранение.",
+            "",
+            "Локальный сервер недоступен — предупреждение и возможный fallback на heavy-модель.",
+        ],
+        "Research": [
+            "Режим с упором на веб-поиск и синтез источников.",
+            "",
+            "/research on|off — флаг research_mode; on также вызывает set_mode(research).",
+            "/research status — состояние режима.",
+            "/research <query> — длинный промпт с инструкцией использовать web_search, context7 и т.д.;",
+            "  запускается run_and_render как обычное сообщение.",
+            "",
+            "Лимиты источников/раундов задаются в ui_prefs (research_max_sources, research_max_rounds, …).",
+        ],
+        "Deep": [
+            "Deep Solver: длинные цепочки рассуждения с контрольными точками.",
+            "",
+            "/deepcp list — id, turn_index, title активных checkpoint (из контекста get_deep_checkpoints).",
+            "/deepcp rollback <id> — откат состояния к checkpoint.",
+            "/deepcp continue <id> — продолжить ветку от checkpoint.",
+            "/stop — выставить stop_requested[0]=True, чтобы прервать текущий прогон графа агента.",
+            "",
+            "Если API checkpoint недоступен, роутер сообщит об ошибке.",
+        ],
+        "Персонализация": [],  # текст выдаётся через _theme_accent_merged_detail_lines()
+    }
+    return sections.get(section_name, [])
+
+
+def _help_topic_wants_theme_accent_merged(topic: str) -> bool:
+    t = (topic or "").strip().lower()
+    return t in (
+        "theme", "тема", "cli_theme", "cli theme",
+        "accent", "acsent", "акцент",
+    )
+
+
+def _help_topic_detail_lines_for_topic(topic: str) -> List[str]:
+    if _help_topic_wants_theme_accent_merged(topic):
+        return _theme_accent_merged_detail_lines()
+    if _help_topic_wants_ollama_detail(topic):
+        return _ollama_help_detail_lines()
+    sec = _resolve_topic_to_help_section(topic)
+    if sec == "Персонализация":
+        return _theme_accent_merged_detail_lines()
+    if sec:
+        return _help_section_detail_lines(sec)
+    return []
+
+
+def _help_topic_wants_ollama_detail(topic: str) -> bool:
+    return "ollama" in (topic or "").strip().lower()
+
+
+def _help_search_tokens(topic: str) -> List[str]:
+    t = (topic or "").strip().lower()
+    if not t:
+        return []
+    tokens = [t]
+    if t == "accent":
+        tokens.append("acsent")
+    elif t == "acsent":
+        tokens.append("accent")
+    return tokens
+
+
+def _filter_help_categories(topic: str) -> List[tuple[str, List[tuple[str, str]]]]:
+    tokens = _help_search_tokens(topic)
+    if not tokens:
+        return []
+    out: List[tuple[str, List[tuple[str, str]]]] = []
+    for cat_name, cmds in _HELP_CATEGORIES:
+        cn = cat_name.lower()
+        if any(tok in cn for tok in tokens):
+            out.append((cat_name, list(cmds)))
+            continue
+        rows: List[tuple[str, str]] = []
+        for cmd, desc in cmds:
+            blob = f"{cmd} {desc}".lower()
+            if any(tok in blob for tok in tokens):
+                rows.append((cmd, desc))
+        if rows:
+            out.append((cat_name, rows))
+    return out
+
+
+def print_help_topic(topic: str) -> None:
+    """Показать строки справки, где встречается topic (команда или описание)."""
+    refresh_cli_ui_from_prefs()
+    filtered = _filter_help_categories(topic)
+    if not filtered:
+        print_info(
+            f"По запросу «{(topic or '').strip()}» совпадений в справке нет. "
+            "Введите /help без аргумента для полного списка."
+        )
+        return
+
+    detail_lines = _help_topic_detail_lines_for_topic(topic)
+    q = (topic or "").strip()
+
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_info(f"── Справка: {q} ──")
+        for cat_name, cmds in filtered:
+            bridge.on_info(f"── {cat_name} ──")
+            for cmd, desc in cmds:
+                bridge.on_info(f"  {cmd:<24} {desc}")
+        if detail_lines:
+            for ln in detail_lines:
+                bridge.on_info(ln)
+        return
+
+    if HAS_RICH:
+        table = Table(
+            box=box.SIMPLE,
+            padding=(0, 2),
+            show_header=False,
+            show_edge=False,
+        )
+        table.add_column("Команда", min_width=24)
+        table.add_column("Описание", style="dim")
+        _hp = _cli_p()
+        for cat_name, cmds in filtered:
+            table.add_row(f"\n[bold]{cat_name}[/bold]", "")
+            for cmd, desc in cmds:
+                table.add_row(f"  [cmd]{cmd}[/cmd]", desc)
+        if detail_lines:
+            inner = Group(
+                table,
+                Rule(style=_hp["accent"]),
+                Text("\n".join(detail_lines), style=_hp["fg2"]),
+            )
+        else:
+            inner = table
+        console.print(
+            Panel(
+                inner,
+                title=f"[bold]  Справка: {q} [/bold]",
+                border_style=_hp["accent"],
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
+    else:
+        print(f"{CYAN}Справка (по запросу «{q}»):{RESET}")
+        for _, cmds in filtered:
+            for cmd, desc in cmds:
+                clean = cmd.replace("[bright_green]", "").replace("[/bright_green]", "")
+                print(f"  {CYAN}{clean:<22}{RESET} {desc}")
+        if detail_lines:
+            print()
+            for ln in detail_lines:
+                print(f"{DIM}{ln}{RESET}")
+    print()
+
+
 def print_commands() -> None:
+    refresh_cli_ui_from_prefs()
     bridge = _get_tui_bridge()
     if bridge:
         for cat_name, cmds in _HELP_CATEGORIES:
@@ -915,16 +1748,17 @@ def print_commands() -> None:
         table.add_column("Команда", min_width=24)
         table.add_column("Описание", style="dim")
 
+        _cp = _cli_p()
         for cat_name, cmds in _HELP_CATEGORIES:
             table.add_row(f"\n[bold]{cat_name}[/bold]", "")
             for cmd, desc in cmds:
-                table.add_row(f"  [cyan bold]{cmd}[/cyan bold]", desc)
+                table.add_row(f"  [cmd]{cmd}[/cmd]", desc)
 
         console.print(
             Panel(
                 table,
                 title="[bold]  Справка [/bold]",
-                border_style="#8B5CF6",
+                border_style=_cp["accent"],
                 box=box.ROUNDED,
                 padding=(0, 1),
             )
@@ -980,12 +1814,13 @@ def print_thinking(thought: str = "") -> None:
         return
 
     if HAS_RICH:
+        _th = _cli_p()
         console.print(
             Panel(
                 Text(thought, style="italic cyan"),
                 title="[bold cyan]🤔 Рассуждение[/bold cyan]",
                 title_align="left",
-                border_style="cyan",
+                border_style=_th["accent"],
                 box=box.ROUNDED,
                 padding=(0, 1),
             )
@@ -1006,6 +1841,91 @@ def print_planning(task: str) -> None:
         print(f"\n   📋 Составляю план: {_truncate(task, 100)}")
 
 
+def print_deep_cli_session_banner(model: str, ctx_limit: int) -> None:
+    """Rich-блок: что Deep Solver делает и что можно вводить (классический CLI)."""
+    bridge = _get_tui_bridge()
+    if bridge:
+        return
+    if not HAS_RICH:
+        print()
+        print("  [Deep Solver] Можно писать в чат — очередь сообщений. /stop — стоп.")
+        return
+    pal = _cli_p()
+    body = (
+        "[bold]Поле ввода внизу активно:[/bold] пиши уточнения и вопросы — они [cyan]встают в очередь[/cyan] и "
+        "попадут в контекст на [cyan]следующем шаге[/cyan] (новый прогон не стартует).\n"
+        f"[dim]Окно контекста ~{ctx_limit:,} ток. ·[/dim] [magenta]/stop[/magenta] [dim]— остановить Deep Solver.[/dim]\n"
+        f"[dim]Сейчас · модель «{model}»[/dim]"
+    )
+    console.print(
+        Panel(
+            body,
+            title="[bold]🧠 Deep Solver — что происходит[/bold]",
+            title_align="left",
+            border_style=pal["accent"],
+            box=box.HEAVY,
+            padding=(0, 1),
+        )
+    )
+
+
+def print_deep_cli_heartbeat(
+    *,
+    elapsed: str,
+    checkpoints: int,
+    model: str,
+    step_round: int,
+    to_stderr: bool = False,
+) -> None:
+    """Компактная строка: время, чекпоинты, шаг (throttle снаружи).
+
+    Для classic CLI ``to_stderr=True`` — не смешивать с stdout/prompt_toolkit.
+    """
+    bridge = _get_tui_bridge()
+    if bridge:
+        return
+    line = (
+        f"  [dim]⏱ {elapsed}[/dim]  ·  [magenta]чекпоинты {checkpoints}[/magenta]  ·  "
+        f"[cyan]модель {model}[/cyan]  ·  [bold]шаг {step_round}[/bold]"
+    )
+    if not HAS_RICH:
+        plain = f"  [Deep] шаг {step_round} · {elapsed} · чекпоинты {checkpoints} · {model}"
+        print(plain, file=(sys.stderr if to_stderr else sys.stdout))
+        return
+    pal = _cli_p()
+    out = _console_err if to_stderr and _console_err is not None else console
+    out.print(
+        line,
+        style=pal.get("fg2", "dim"),
+    )
+
+
+def print_deep_cli_checkpoint(
+    index: int, title: str, summary: str = "", cp_id: str = "",
+) -> None:
+    bridge = _get_tui_bridge()
+    if bridge:
+        return
+    if not HAS_RICH:
+        print(f"  [cp #{index}] {title}")
+        if summary:
+            print(f"   {summary[:200]}")
+        return
+    pal = _cli_p()
+    sub = f"[dim]{cp_id}[/dim]" if cp_id else ""
+    body = (summary or "").strip() or "—"
+    console.print(
+        Panel(
+            body,
+            title=f"[bold]🧩 Чекпоинт #{index} · {title}[/bold]  {sub}",
+            title_align="left",
+            border_style=pal.get("green", "green"),
+            box=box.ROUNDED,
+            padding=(0, 1),
+        )
+    )
+
+
 def _get_tui_bridge():
     """Return the active TUI bridge, if any."""
     try:
@@ -1015,13 +1935,55 @@ def _get_tui_bridge():
         return None
 
 
+def print_info_block(
+    lines: List[str] | str, title: str = "Инфо", *, accent: str = "dim",
+) -> None:
+    """Несколько строк в одной Rich-панели (команды /mode, /ollama, …)."""
+    if isinstance(lines, str):
+        body_lines = [lines] if lines else [""]
+    else:
+        body_lines = list(lines) if lines else [""]
+    text_body = "\n".join(str(x) for x in body_lines)
+    bridge = _get_tui_bridge()
+    if bridge:
+        bridge.on_info(f"── {title} ──\n{text_body}")
+        return
+    if HAS_RICH:
+        pal = _cli_p()
+        bstyle = str(pal.get(accent) or pal.get("fg2") or "dim")
+        console.print(
+            Panel(
+                Text(text_body, style=pal.get("fg2", "default"), no_wrap=False, overflow="fold"),
+                title=f"[bold]{title}[/bold]",
+                title_align="left",
+                border_style=bstyle,
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
+    else:
+        print(f"  {CYAN}── {title} ──{RESET}")
+        for line in body_lines:
+            print(f"  {CYAN}{line}{RESET}")
+
+
 def print_info(message: str) -> None:
     bridge = _get_tui_bridge()
     if bridge:
         bridge.on_info(message)
         return
     if HAS_RICH:
-        console.print(f"  [info]{message}[/info]")
+        pal = _cli_p()
+        console.print(
+            Panel(
+                Text(str(message), style=pal.get("fg2", "default"), overflow="fold"),
+                title="[dim bold]ℹ Инфо[/dim bold]",
+                title_align="left",
+                border_style=str(pal.get("fg2", "dim")),
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
     else:
         print(f"  {CYAN}{message}{RESET}")
 
@@ -1032,7 +1994,17 @@ def print_success(message: str) -> None:
         bridge.on_success(message)
         return
     if HAS_RICH:
-        console.print(f"  [success]✓ {message}[/success]")
+        pal = _cli_p()
+        console.print(
+            Panel(
+                Text(str(message), style=pal.get("green", "green"), overflow="fold"),
+                title="[bold green]✓ Готово[/bold green]",
+                title_align="left",
+                border_style=str(pal.get("green", "green")),
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
     else:
         print(f"  {GREEN}✓ {message}{RESET}")
 
@@ -1043,7 +2015,21 @@ def print_warning(message: str) -> None:
         bridge.on_warning(message)
         return
     if HAS_RICH:
-        console.print(f"  [warning]⚠ {message}[/warning]")
+        from rich.panel import Panel as RPanel
+        from rich.text import Text
+        from rich import box as rbox
+
+        pal = _cli_p()
+        console.print(
+            RPanel(
+                Text(str(message), style=f"bold {pal['yellow']}"),
+                title="[bold]Предупреждение[/bold]",
+                title_align="left",
+                border_style=pal["yellow"],
+                box=rbox.ROUNDED,
+                padding=(0, 1),
+            )
+        )
     else:
         print(f"  {YELLOW}⚠ {message}{RESET}")
 
@@ -1054,22 +2040,58 @@ def print_error(message: str) -> None:
         bridge.on_error(message)
         return
     if HAS_RICH:
-        console.print(f"  [error]✗ {message}[/error]")
+        pal = _cli_p()
+        console.print(
+            Panel(
+                Text(str(message), style=str(pal.get("red", "red")), overflow="fold"),
+                title="[bold red]✗ Ошибка[/bold red]",
+                title_align="left",
+                border_style=str(pal.get("red", "red")),
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
     else:
         print(f"  {RED}✗ {message}{RESET}")
 
 
 def get_user_input() -> str:
+    try:
+        from Interface.ui_prefs import cli_prompt_prefix_plain
+
+        pfx = cli_prompt_prefix_plain().rstrip() or "❯"
+    except Exception:
+        pfx = "❯"
     if HAS_RICH:
         try:
-            return console.input("[bold blue]❯[/bold blue] ")
+            return console.input(f"[bold cyan]{pfx}[/bold cyan] ")
         except (KeyboardInterrupt, EOFError):
             return "/exit"
     else:
         try:
-            return input(f"{BLUE}❯{RESET} ")
+            return input(f"{BLUE}{pfx}{RESET} ")
         except (KeyboardInterrupt, EOFError):
             return "/exit"
+
+
+def read_cli_line(prompt: Optional[str] = None) -> str:
+    """Одна строка ввода; при EOF/Ctrl+D — пустая строка (не ``/exit``), чтобы не путать с id модели."""
+    if prompt is None:
+        try:
+            from Interface.ui_prefs import cli_prompt_prefix_plain
+
+            prompt = cli_prompt_prefix_plain()
+        except Exception:
+            prompt = "❯ "
+    if HAS_RICH:
+        try:
+            return (console.input(f"[bold cyan]{prompt}[/bold cyan]") or "").strip()
+        except (KeyboardInterrupt, EOFError):
+            return ""
+    try:
+        return (input(f"{BLUE}{prompt}{RESET}") or "").strip()
+    except (KeyboardInterrupt, EOFError):
+        return ""
 
 
 def display_file_diffs(files: List[str]) -> None:
@@ -1139,9 +2161,10 @@ def display_rag_results(results: List[Dict[str, Any]], query_text: str) -> None:
         if not results:
             console.print(f"  [dim]RAG: нет результатов для '{query_text}'[/dim]")
             return
+        _rg = _cli_p()
         table = Table(
             title=f"[bold]RAG: '{query_text}'[/bold]",
-            box=box.ROUNDED, padding=(0, 1), border_style="cyan",
+            box=box.ROUNDED, padding=(0, 1), border_style=_rg["accent"],
         )
         table.add_column("Файл", style="cyan", max_width=50)
         table.add_column("Строки", style="dim", width=10)
@@ -1213,6 +2236,7 @@ def display_enhanced_status(
     bar = f"[{bar_color}]{'█' * filled}{'░' * (bar_len - filled)}[/{bar_color}] [dim]{pct}%[/dim]"
 
     model_link = f"[link=https://openrouter.ai/models/{model_name}]{model_name}[/link]"
+    _esp = _cli_p()
 
     content = (
         f"  [dim]Модель:[/dim]    [bold cyan]{model_link}[/bold cyan]\n"
@@ -1252,7 +2276,7 @@ def display_enhanced_status(
         Panel(
             content,
             title="[bold]  Статус сессии [/bold]",
-            border_style="#8B5CF6",
+            border_style=_esp["accent"],
             box=box.ROUNDED,
             padding=(1, 2),
         )
@@ -1295,6 +2319,8 @@ def suggest_command(user_input: str) -> Optional[str]:
         "/help", "/exit", "/plan", "/status", "/profile", "/model",
         "/balance", "/credits", "/compact", "/versions", "/rollback",
         "/agent", "/custom", "/creator", "/ls", "/tree", "/rag",
+        "/mode", "/normal", "/agentmode", "/deepmode", "/deep", "/creatormode", "/researchmode",
+        "/research", "/ollama", "/deepcp", "/stop",
     ]
 
     cmd = user_input.split()[0].lower()

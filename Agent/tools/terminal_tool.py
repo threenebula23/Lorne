@@ -8,6 +8,11 @@ from typing import Any, Dict
 from langchain_core.tools import tool
 
 try:
+    from ..runtime_paths import env_pref
+except ImportError:
+    from Agent.runtime_paths import env_pref
+
+try:
     from ..path_utils import resolve_abs_path
 except ImportError:
     from pathlib import Path
@@ -60,10 +65,15 @@ def _is_dangerous(command: str) -> bool:
     return any(pat in cmd for pat in dangerous_patterns)
 
 @tool
-def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[str, Any]:
-    """Выполнить shell-команду с подтверждением пользователя. stdin закрыт — используй `-y`/echo/pipe. cwd: пустая или '.' = текущая директория."""
+def run_command(
+    command: str,
+    cwd: str = "",
+    timeout_seconds: int = 30,
+    background: bool = False,
+) -> Dict[str, Any]:
+    """Shell; stdin закрыт (`-y`/pipe). cwd пусто = проект. background=True — отдельный процесс, лог в каталоге данных проекта (``.lorne`` / legacy ``.tca``) / ``background_cmd.log`` (dev-серверы)."""
     from pathlib import Path
-    from Terminal.runner import run_command_safe
+    from Terminal.runner import run_command_safe, run_command_detached
     
     try:
         from Interface.graph_display import pause_live_display
@@ -74,8 +84,8 @@ def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[
             yield
 
     signature = _sig(command, cwd)
-    # TCA_RUN_COMMAND_DEDUPE_S: 0 = отключить; иначе окно в секундах (раньше было 20)
-    _dedupe_s = int(os.environ.get("TCA_RUN_COMMAND_DEDUPE_S", "0") or 0)
+    # LORNE_RUN_COMMAND_DEDUPE_S / TCA_RUN_COMMAND_DEDUPE_S: 0 = отключить; иначе окно в секундах
+    _dedupe_s = int(env_pref("RUN_COMMAND_DEDUPE_S", "0") or 0)
     if _dedupe_s > 0 and _too_soon(signature, window_s=_dedupe_s):
         return {
             "stdout": "",
@@ -131,7 +141,16 @@ def run_command(command: str, cwd: str = "", timeout_seconds: int = 30) -> Dict[
         if resolved.exists() and resolved.is_dir():
             cwd_str = str(resolved)
         # иначе cwd_str остаётся None — выполнение в текущей директории
-    
+
+    if background:
+        t0 = time.time()
+        res = run_command_detached(command=command.strip(), cwd=cwd_str)
+        if isinstance(res, dict):
+            res.setdefault("command", command.strip())
+            res.setdefault("elapsed_seconds", round(time.time() - t0, 3))
+        _RECENT[_sig(command, cwd)] = {"ts": time.time(), "returncode": res.get("returncode")}
+        return res
+
     t0 = time.time()
     res = run_command_safe(command=command.strip(), cwd=cwd_str, timeout=timeout_seconds)
     elapsed = round(time.time() - t0, 3)

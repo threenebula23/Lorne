@@ -1,11 +1,11 @@
-# TCA — Terminal Coding Assistant
+# Lorne v0.98 — терминальный ассистент для кода
 
 
 ![](./wiki/image.png)
 
 
 
-**Документация для разработчиков (модули, архитектура):** [ARCHITECTURE.md](wiki/ARCHITECTURE.md) · [EXTENDING.md](wiki/EXTENDING.md) · [TOOLS.md](wiki/TOOLS.md) · [COMPACT_TOOLS.md](wiki/COMPACT_TOOLS.md) · [BACKGROUND_AND_DEEP.md](wiki/BACKGROUND_AND_DEEP.md) · [wiki/README.md](wiki/README.md)
+**Документация:** [wiki/README.md](wiki/README.md) · [wiki/tutorials/quickstart.md](wiki/tutorials/quickstart.md) · [wiki/MODES/README.md](wiki/MODES/README.md) · [wiki/PROJECT_BRAIN.md](wiki/PROJECT_BRAIN.md) · [wiki/ARCHITECTURE.md](wiki/ARCHITECTURE.md) · [wiki/TOOLS.md](wiki/TOOLS.md) · [wiki/COMPACT_TOOLS.md](wiki/COMPACT_TOOLS.md) · [wiki/BACKGROUND_AND_DEEP.md](wiki/BACKGROUND_AND_DEEP.md) · [wiki/EXTENDING.md](wiki/EXTENDING.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [docs/README.md](docs/README.md)
 
 ## Возможности
 
@@ -15,7 +15,7 @@
 - **Версионирование** — SQLite-снимки файлов + Git-интеграция (автокоммиты, откат, история)
 - **RAG-поиск** — семантический чанкинг, word-level scoring, mtime-кэш, инкрементальная переиндексация
 - **Сессии** — сохранение и восстановление диалогов между запусками (SQLite), именованные чаты, модальный выбор сессии при старте TUI
-- **Откат хода (TUI)** — у каждого пользовательского сообщения кнопка отката: восстанавливается история диалога до этого хода и рабочая копия файлов по снимкам версий TCA (см. `.tca/checkpoints.sqlite` + `.tca/versions.sqlite`)
+- **Откат хода (TUI)** — у каждого пользовательского сообщения кнопка отката: восстанавливается история диалога до этого хода и рабочая копия файлов по снимкам версий (каталог данных проекта: ``.lorne`` или существующий legacy ``.tca`` — см. ``Agent/runtime_paths.py``)
 - **Красивый UI** — Rich-панели, подсветка синтаксиса, прогресс-бары, Markdown, подсказки команд
 - **Много моделей** — 27+ моделей через OpenRouter (бесплатные, дешёвые, платные, про)
 - **Creator Mode** — параллельное выполнение подзадач несколькими агентами (local + heavy модели)
@@ -57,17 +57,17 @@ install.bat
 Скрипт установки:
 1. Создаёт виртуальное окружение `.venv`
 2. Устанавливает зависимости из `requirements.txt`
-3. Создаёт команду `tca`, доступную из любой директории
+3. Создаёт команды **`lorne`** и **`tca`** (алиас к тому же запуску) в PATH
 
 ### Первый запуск
 
 ```bash
 # С ключом через аргумент
-tca env=sk-or-v1-ваш_ключ
+lorne env=sk-or-v1-ваш_ключ
 
 # Или сохранить ключ в файл
 echo 'OPENROUTER_API_KEY=sk-or-v1-ваш_ключ' > Agent/.env
-tca
+lorne
 ```
 
 ---
@@ -77,24 +77,25 @@ tca
 ### Запуск
 
 ```bash
-tca                            # работает в текущей директории
-tca /path/to/project           # работает в указанном проекте
-tca env=sk-or-v1-xxx           # передать API-ключ через аргумент
-tca /path/to/project env=KEY   # оба варианта (любой порядок)
+lorne                          # работает в текущей директории
+lorne /path/to/project         # работает в указанном проекте
+lorne env=sk-or-v1-xxx         # передать API-ключ через аргумент
+lorne /path/to/project env=KEY # оба варианта (любой порядок)
 ```
+
 
 По умолчанию запускается **TUI-IDE** (Textual). Классический режим — только чат в терминале (Rich):
 
 ```bash
-TCA_MODE=classic tca
+TCA_MODE=classic lorne
 # или
-tca --classic
+lorne --classic
 python -m Terminal --classic
 ```
 
-Явно включить TUI: `tca --tui` или `TCA_MODE=tui` (значение по умолчанию).
+Явно включить TUI: `lorne --tui` или `TCA_MODE=tui` (значение по умолчанию).
 
-Альтернативный способ запуска (без установки) — поведение как у `tca` (TUI по умолчанию, тот же разбор `env=` и каталога):
+Альтернативный способ запуска (без установки) — тот же разбор `env=` и каталога через `python tca.py`:
 
 ```bash
 python tca.py
@@ -103,7 +104,7 @@ python -m Terminal              # TUI; для classic: python -m Terminal --clas
 
 ### Интерфейс
 
-После запуска TCA покажет приветственный экран с текущей моделью, профилем и проектом (в TUI затем — выбор сессии). В панели чата доступны режимы **Normal**, **Creator**, **Agent** (расширенный набор инструментов, в т.ч. браузер по настройкам) и **Research** (префикс к запросу для упора на веб-источники). Далее — интерактивный цикл ввода задач.
+После запуска Lorne покажет приветственный экран с текущей моделью, профилем и проектом (в TUI затем — выбор сессии). В панели чата доступны режимы **Normal**, **Creator**, **Agent** (расширенный набор инструментов, в т.ч. браузер по настройкам) и **Research** (префикс к запросу для упора на веб-источники). Далее — интерактивный цикл ввода задач.
 
 **Пример сессии:**
 
@@ -168,7 +169,7 @@ python -m Terminal              # TUI; для classic: python -m Terminal --clas
 
 Три способа указать ключ OpenRouter (в порядке приоритета):
 
-1. **Аргумент запуска:** `tca env=sk-or-v1-xxx`
+1. **Аргумент запуска:** `lorne env=sk-or-v1-xxx` (или `tca env=…`)
 2. **Файл `.env`:** создать `Agent/.env` или `.env` в корне TCA с содержимым `OPENROUTER_API_KEY=sk-or-v1-xxx`
 3. **Переменная окружения:** `export OPENROUTER_API_KEY=sk-or-v1-xxx`
 
@@ -232,18 +233,18 @@ GPT-5.1 Codex, GPT-5.3 Codex, Gemini 3.1 Pro, Claude Haiku 4.5, Claude Sonnet 4.
 
 ```
 TCA/
-├── tca.py                      # Точка входа: TUI (по умолчанию) или classic CLI
+├── tca.py                      # Точка входа Python; после install — команды lorne и tca (алиас)
 ├── requirements.txt
 ├── wiki/                       # ARCHITECTURE.md, EXTENDING.md, TOOLS.md, BACKGROUND_AND_DEEP.md
 │
 ├── Agent/                      # Ядро: LLM, LangGraph, инструменты, RAG, сессии
-│   ├── agent.py                # run_tui_mode / run_coding_agent_loop; снимки перед ходом, откат TUI
+│   ├── agent/                  # run_tui_mode / run_coding_agent_loop; снимки, откат TUI
 │   ├── graph_runner.py         # LangGraph: call_model, execute_tools, анти-петля
 │   ├── tool_registry.py        # build_tools(agent_mode, playwright_python), compact + custom
-│   ├── message_utils.py        # Санитизация, компактирование, восстановление tool JSON, петли тулов
-│   ├── deep_solver.py          # Deep Solver: долгий локальный цикл, чекпоинты, spawn_subagent async
+│   ├── message_utils/          # Санитизация, компактирование, восстановление tool JSON, петли тулов
+│   ├── deep_solver/            # Пакет Deep Solver; legacy_loop.py — долгий цикл, чекпоинты
 │   ├── background_agent_runner.py  # Фоновый LLM+тул-цикл для start_background_task
-│   ├── command_router.py       # Slash-команды в classic-режиме
+│   ├── command_router/         # Slash-команды в classic-режиме
 │   ├── llm_provider.py         # OpenRouter, профили, модели
 │   ├── planner.py              # Планы задач
 │   ├── git_integration.py      # GitPython
@@ -259,7 +260,7 @@ TCA/
 │   └── file_loading/           # Загрузка файлов для RAG
 │
 ├── Interface/                  # TUI (Textual) + Rich для classic
-│   ├── tui_app.py              # TCAApp: layout IDE
+│   ├── tui_app.py              # LorneApp: layout IDE
 │   ├── session_picker_screen.py  # Модальный выбор сессии при старте TUI
 │   ├── tui_bridge.py           # Мост агент ↔ панели (потокобезопасно)
 │   ├── themes.py               # Темы
@@ -452,13 +453,13 @@ _base_tools: List[Any] = [
 
 | Модуль | Что менять |
 |---|---|
-| `Agent/agent.py` | Точка входа TUI/classic, мост с UI, сессии |
+| `Agent/agent/` | Точка входа TUI/classic, мост с UI, сессии |
 | `Agent/graph_runner.py` | LangGraph: узлы и рёбра графа, подсказки при петлях |
 | `Agent/tool_registry.py` | Список инструментов, `build_tools(agent_mode=...)` |
-| `Agent/command_router.py` | Slash-команды (classic) |
-| `Agent/deep_solver.py` | Режим Deep Solver (локальная модель) |
+| `Agent/command_router/` | Slash-команды (classic) |
+| `Agent/deep_solver/` | Режим Deep Solver (локальная модель), `legacy_loop.py` |
 | `Agent/background_agent_runner.py` | Очередь фоновых микро-задач LLM+тулов |
-| `Agent/message_utils.py` | Санитизация, компактирование, восстановление tool JSON, анти-петля |
+| `Agent/message_utils/` | Санитизация, компактирование, восстановление tool JSON, анти-петля |
 | `Agent/git_integration.py` | Git |
 | `Agent/rag/` | RAG |
 | `Agent/llm_provider.py` | Модели и OpenRouter |
@@ -488,7 +489,7 @@ _base_tools: List[Any] = [
 uninstall.bat
 ```
 
-Скрипт удалит виртуальное окружение и команду `tca`. Опционально удалит данные сессий и версий.
+Скрипт удалит виртуальное окружение и команды `lorne` / `tca` в PATH. Опционально удалит данные сессий и версий.
 
 ---
 

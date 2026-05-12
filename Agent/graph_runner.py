@@ -1,4 +1,4 @@
-"""LangGraph agent graph: call_model / execute_tools / workflow compilation."""
+"""LangGraph agent graph: call_model / execute_tools / brain_sync / workflow compilation."""
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
@@ -16,6 +16,7 @@ from .message_utils import (
     extract_textual_tool_calls, extract_structured_tool_calls,
     summarize_tool_like_final_answer,
     tool_repetition_loop_nudge,
+    safe_chat_invoke_with_tool_recovery,
 )
 
 try:
@@ -85,7 +86,9 @@ class AgentGraph:
                     invoke_msgs.append(
                         SystemMessage(content="### Анти-петля (только для этого ответа)\n" + _nudge)
                     )
-                raw_response = self.llm_with_tools.invoke(invoke_msgs)
+                raw_response = safe_chat_invoke_with_tool_recovery(
+                    self.llm_with_tools, invoke_msgs,
+                )
                 spinner.stop()
                 last_error = None
                 break
@@ -187,8 +190,40 @@ class AgentGraph:
 
         return {"messages": [AIMessage(content=content, response_metadata=meta)]}
 
+    def _brain_sync(self, state: MessagesState) -> Dict[str, Any]:
+        """After a final assistant message (no tool calls), sync brain RAG from disk.
+
+        In **brainer** mode also runs a full ``refresh_project_brain`` scan so
+        scanner-owned Markdown matches the repo before reindex (RAG stays aligned
+        with code without relying on the model to call ``refresh``).
+        """
+        try:
+            import os
+
+            from Agent.path_utils import get_project_root
+            from Agent.stream_chat_mode import get_stream_chat_mode
+
+            flag = os.environ.get("LORNE_SKIP_BRAIN_SYNC", "").strip().lower()
+            if flag in ("1", "true", "yes", "on"):
+                return {}
+            root = get_project_root()
+            mode = get_stream_chat_mode()
+            if mode == "brainer":
+                from Agent.project_brain import refresh_project_brain
+                from Agent.project_brain.agent_architecture import reindex_brain_rag
+
+                refresh_project_brain(root)
+                reindex_brain_rag(root)
+            else:
+                from Agent.project_brain.agent_architecture import run_brain_sync_if_enabled
+
+                run_brain_sync_if_enabled(root)
+        except Exception:
+            pass
+        return {}
+
     _READ_ONLY_TOOLS = frozenset({
-        "read_file", "list_files", "search_in_files", "rag_search",
+        "read_file", "list_files", "search_in_files", "find_in_file", "rag_search",
         "get_file_line_count", "load_plan",
         "web_search", "web_fetch",
         "ocr_tool",
@@ -203,6 +238,7 @@ class AgentGraph:
         "docx_write_tool", "docxedit_tool", "docx_document_advanced_ops",
         "pdf_styled_document_create",
         "file_versions_tool",
+        "project_brain_tool",
     })
 
     def _run_single_tool(self, idx: int, tc_norm: dict) -> ToolMessage:
@@ -324,14 +360,25 @@ class AgentGraph:
             for idx, tc_norm in enumerate(normalized):
                 results[idx] = self._run_single_tool(idx, tc_norm)
 
-        return {"messages": [r for r in results if r is not None]}
+        out = {"messages": [r for r in results if r is not None]}
+        try:
+            from Agent.stream_chat_mode import get_stream_chat_mode
+
+            if get_stream_chat_mode() in ("brainer", "research"):
+                from Agent.path_utils import get_project_root
+                from Agent.project_brain.agent_architecture import run_brain_sync_if_enabled
+
+                run_brain_sync_if_enabled(get_project_root())
+        except Exception:
+            pass
+        return out
 
     @staticmethod
-    def _should_continue(state: MessagesState) -> str:
+    def _route_after_agent(state: MessagesState) -> str:
         last_message = state["messages"][-1]
-        if last_message.tool_calls:
+        if getattr(last_message, "tool_calls", None):
             return "tools"
-        return END
+        return "brain_sync"
 
     # ─── Graph construction ─────────────────────────────────────
 
@@ -339,12 +386,14 @@ class AgentGraph:
         workflow = StateGraph(state_schema=MessagesState)
         workflow.add_node("agent", self._call_model)
         workflow.add_node("tools", self._execute_tools)
+        workflow.add_node("brain_sync", self._brain_sync)
         workflow.set_entry_point("agent")
         workflow.add_conditional_edges(
-            "agent", self._should_continue,
-            {"tools": "tools", END: END},
+            "agent", self._route_after_agent,
+            {"tools": "tools", "brain_sync": "brain_sync"},
         )
         workflow.add_edge("tools", "agent")
+        workflow.add_edge("brain_sync", END)
         return workflow.compile()
 
     def stream(self, input_data, **kwargs):

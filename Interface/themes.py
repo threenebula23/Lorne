@@ -1,4 +1,4 @@
-"""TCA Theme Engine — 20 themes (10 dark + 10 light) applied programmatically."""
+"""Движок тем Lorne — 20 тем (10 тёмных + 10 светлых), применяются программно."""
 from __future__ import annotations
 from typing import Dict, Any
 
@@ -102,12 +102,12 @@ def _register_textarea_theme(widget: Any, name: str, spec: Dict[str, str]) -> No
 
 def ensure_custom_textarea_themes(widget: Any) -> None:
     """Register all custom TextArea themes once per widget instance."""
-    if getattr(widget, "_tca_custom_syntax_ready", False):
+    if getattr(widget, "_lorne_custom_syntax_ready", False):
         return
     for name, spec in _CUSTOM_TEXTAREA_THEMES.items():
         _register_textarea_theme(widget, name, spec)
     try:
-        setattr(widget, "_tca_custom_syntax_ready", True)
+        setattr(widget, "_lorne_custom_syntax_ready", True)
     except Exception:
         pass
 
@@ -318,7 +318,7 @@ def get_theme(name: str) -> ThemeColors:
 
 
 def apply_theme(app, theme_name: str) -> None:
-    """Apply a theme to the TCA app by setting CSS variables on all major widgets."""
+    """Применить тему к приложению: CSS-переменные на основных виджетах."""
     from .ui_prefs import load_prefs
     prefs = load_prefs()
     custom_accent = prefs.get("accent_color")

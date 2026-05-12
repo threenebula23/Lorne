@@ -1,54 +1,22 @@
-# Архитектура интерфейса TCA (TUI OVERVIEW)
+# Интерфейс TUI — обзор компонентов
 
-Интерфейс TCA построен на фреймворке **Textual** (Python). Это библиотека для терминальных приложений с поддержкой мыши, слоёв, TCSS и асинхронности.
+## Слои
 
-## Для всех: как устроено
+1. **Приложение** — `Interface/tui_app.py` (`LorneApp`): композиция виджетов, биндинги клавиш, обработка `ChatSubmitted`, открытие файлов.
+2. **Мост** — `Interface/tui_bridge.py`: безопасные вызовы из фонового потока агента в главный поток Textual (`call_from_thread`).
+3. **Панели** — `Interface/panels/`:
+   - `ai_chat/` — лента сообщений, ввод, режим, модель;
+   - `workspace_center.py` — вкладки;
+   - `file_explorer.py` — дерево проекта и **вкладки настроек**;
+   - `active_agents_panel.py` — Creator;
+   - `code_editor/`, `image_viewer.py`, и др.
 
-- **Старт** — модальный **`SessionPickerScreen`**: список сохранённых чатов с кнопками «Открыть» / «Удалить», «Новый чат», «Выход из TCA».
-- **Главное окно** (`TCAApp` в `Interface/tui_app.py`) задаёт сетку: слева колонка (файлы + активные агенты), по центру рабочая область с вкладками.
-- **Центр** (`WorkspaceCenter`): первая вкладка — чат (`AIChatPanel`), остальные — открытые файлы или изображения.
-- **Режимы чата** (селектор в панели ввода): **Normal**, **Creator**, **Agent** (браузерные инструменты — по настройкам и флагу Python Playwright), **Research** (запрос дополняется указанием опираться на веб-поиск и несколько источников).
-- **Откат хода** — у каждого сообщения пользователя кнопка: восстанавливается история до этого хода и файлы проекта по снимкам TCA (см. `Agent/checkpoint`, `Agent/versioning`).
-- **Мост** (`TUIBridge` в `Interface/tui_bridge.py`) — канал из фонового потока агента в UI: ответы, инструменты, Creator-дерево, стоп; `on_chat_reload_messages` пересобирает чат после отката или смены сессии.
+## Поток сообщения чата
 
----
+`AIChatPanel` → событие → callback из `Agent/agent` (сборка сообщения, запуск графа в потоке) → ответы через `TUIBridge` обратно в панель.
 
-## Для разработчиков: основные компоненты
+## Расширение
 
-### 1. `Interface/tui_app.py` — `TCAApp`
+См. [EXTENDING.md](EXTENDING.md) в этой папке и [../developer/ADDING_TOOLS.md](../developer/ADDING_TOOLS.md) для тулов.
 
-- **`compose()`** — `Header`, левая колонка (`FileExplorerPanel`, `ActiveAgentsPanel`), `WorkspaceCenter`, строка статуса.
-- **Bindings** — горячие клавиши (`Ctrl+Q`, сохранение, фокус в чат и т.д.).
-- События: открытие файла, отправка чата, смена модели/режима, выбор воркера в дереве агентов.
-
-### 2. `Interface/tui_bridge.py`
-
-Агент работает в **отдельном потоке**; прямой доступ к виджетам запрещён. Все колбэки идут через `app.call_from_thread(...)`.
-
-Примеры: `on_model_reply`, `on_context_update`, `on_creator_worker_update`, `request_confirmation`.
-
-### 3. `Interface/panels/`
-
-| Модуль | Назначение |
-|--------|------------|
-| `ai_chat.py` | Поток сообщений (Markdown), ввод, режимы, вложения в контекст, метрики окна/сессии, лог выбранного воркера Creator. |
-| `workspace_center.py` | `TabbedContent`: чат + вкладки редактора/просмотра. |
-| `file_explorer.py` | Дерево проекта, действия с файлами; настройки в вкладках **персонализация**, **агенты**, **OpenRouter**, **Ollama** (см. `ui_prefs`). |
-| `active_agents_panel.py` | Дерево задач Creator / режимов; переключение на лог воркера или общий чат. |
-| `code_editor.py`, `image_viewer.py` | Редактирование и просмотр во вкладках. |
-
-Стили глобально — **`Interface/tui_app.tcss`**; классы плотности `density-compact|normal|spacious` вешаются на приложение из настроек.
-
----
-
-## Поток данных
-
-1. Пользователь отправляет сообщение в чате → `ChatSubmitted`.
-2. `TCAApp` вызывает переданный из `Agent/agent.py` callback `on_chat_submit`.
-3. В фоне выполняется граф или Creator; прогресс идёт в `TUIBridge` → панели обновляются через `call_from_thread`.
-
----
-
-## Стилизация
-
-Цвета и размеры — в `Interface/tui_app.tcss` и темах в `Interface/themes.py`. Пользовательские предпочтения читаются из `Interface/ui_prefs.py` (файл `.tca/ui_settings.json` в проекте).
+Настройки и prefs: [SETTINGS.md](SETTINGS.md).

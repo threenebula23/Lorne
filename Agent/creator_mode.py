@@ -1,5 +1,5 @@
 """
-Creator Mode — оркестратор параллельных агентов для TCA.
+Creator Mode — оркестратор параллельных агентов для Lorne.
 
 Разбивает сложную задачу на подзадачи и параллельно выполняет их
 через ThreadPoolExecutor, используя маршрутизацию local/heavy моделей.
@@ -29,7 +29,7 @@ try:
         build_worker_user_content,
         synthesize_supervisor_report,
     )
-    from .planner import build_plan
+    from .planner import build_creator_plan
     from .system_promt import SYSTEM_PROMPT
 except ImportError:
     from Agent.creator_provider import (
@@ -43,7 +43,7 @@ except ImportError:
         build_worker_user_content,
         synthesize_supervisor_report,
     )
-    from Agent.planner import build_plan
+    from Agent.planner import build_creator_plan
     from Agent.system_promt import SYSTEM_PROMPT
 
 try:
@@ -54,6 +54,7 @@ try:
         extract_structured_tool_calls,
         normalize_tool_call,
         summarize_tool_like_final_answer,
+        safe_chat_invoke_with_tool_recovery,
     )
 except ImportError:
     from Agent.message_utils import (
@@ -63,6 +64,7 @@ except ImportError:
         extract_structured_tool_calls,
         normalize_tool_call,
         summarize_tool_like_final_answer,
+        safe_chat_invoke_with_tool_recovery,
     )
 
 try:
@@ -120,7 +122,7 @@ def _build_worker_graph(
     def call_model(state: MessagesState) -> Dict[str, List[AIMessage]]:
         messages = state["messages"]
         try:
-            response = llm_with_tools.invoke(messages)
+            response = safe_chat_invoke_with_tool_recovery(llm_with_tools, messages)
         except Exception as e:
             return {"messages": [AIMessage(content=f"Ошибка: {e}")]}
 
@@ -198,20 +200,41 @@ def _build_worker_graph(
             if len(content_str) > 3000:
                 content_str = content_str[:1500] + "\n…[truncated]…\n" + content_str[-1500:]
             results.append(ToolMessage(content=content_str, tool_call_id=tool_call_id, name=tool_name))
+        try:
+            from Agent.path_utils import get_project_root
+            from Agent.project_brain.agent_architecture import run_brain_sync_if_enabled
+
+            run_brain_sync_if_enabled(get_project_root())
+        except Exception:
+            pass
         return {"messages": results}
+
+    def brain_sync(state: MessagesState) -> Dict[str, Any]:
+        try:
+            from Agent.path_utils import get_project_root
+            from Agent.project_brain.agent_architecture import run_brain_sync_if_enabled
+
+            run_brain_sync_if_enabled(get_project_root())
+        except Exception:
+            pass
+        return {}
 
     def should_continue(state: MessagesState) -> str:
         last = state["messages"][-1]
         if getattr(last, "tool_calls", None):
             return "tools"
-        return END
+        return "brain_sync"
 
     wf = StateGraph(state_schema=MessagesState)
     wf.add_node("agent", call_model)
     wf.add_node("tools", execute_tools)
+    wf.add_node("brain_sync", brain_sync)
     wf.set_entry_point("agent")
-    wf.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
+    wf.add_conditional_edges(
+        "agent", should_continue, {"tools": "tools", "brain_sync": "brain_sync"},
+    )
     wf.add_edge("tools", "agent")
+    wf.add_edge("brain_sync", END)
     return wf.compile()
 
 
@@ -597,13 +620,18 @@ def run_creator_mode(
     try:
         # Импорт визуализации для логирования
         from Interface.visualization import (
-            print_info, print_success, print_warning, print_error,
+            print_info, print_info_block, print_success, print_warning, print_error,
         )
     except ImportError:
         def print_info(m): print(f"  {m}")
         def print_success(m): print(f"  ✓ {m}")
         def print_warning(m): print(f"  ⚠ {m}")
         def print_error(m): print(f"  ✗ {m}")
+        def print_info_block(lines, title="Инфо", *, accent="dim"):
+            body = [lines] if isinstance(lines, str) else list(lines or [])
+            print_success(title)
+            for ln in body:
+                print_info(ln)
 
     t_start = time.time()
 
@@ -658,7 +686,7 @@ def run_creator_mode(
     _emit_progress(phase="planning", percent=5.0)
 
     try:
-        subtasks = build_plan(task)
+        subtasks = build_creator_plan(task)
     except Exception as e:
         print_error(f"Не удалось разбить задачу: {e}")
         if is_root_run and bridge is not None:
@@ -672,9 +700,11 @@ def run_creator_mode(
         print_warning("Задача слишком простая для Creator Mode, выполняю как одну задачу")
         subtasks = [task]
 
-    print_success(f"Подзадачи ({len(subtasks)}):")
-    for i, st in enumerate(subtasks):
-        print_info(f"  {i + 1}. {st}")
+    print_info_block(
+        [f"  {i + 1}. {st}" for i, st in enumerate(subtasks)],
+        title=f"Подзадачи ({len(subtasks)})",
+        accent="accent",
+    )
 
     _emit_progress(phase="planning", percent=10.0, completed=0, total=len(subtasks))
 

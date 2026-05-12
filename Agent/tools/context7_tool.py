@@ -1,10 +1,7 @@
-"""Context7 documentation tool — direct API integration.
+"""Инструмент Context7 — прямой вызов REST API.
 
-Uses Context7 REST API (https://context7.com/api/v2) for library documentation.
-Falls back to DuckDuckGo search if CONTEXT7_API_KEY is not set.
-
-API key: free registration at https://context7.com/dashboard
-Env var: CONTEXT7_API_KEY
+Использует ``https://context7.com/api/v2``. Без ``CONTEXT7_API_KEY`` возможен
+fallback на поиск. Ключ: регистрация на https://context7.com/dashboard .
 """
 from __future__ import annotations
 
@@ -37,10 +34,15 @@ def _c7_request(endpoint: str, params: Dict[str, str]) -> Optional[Dict[str, Any
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
+    try:
+        from Interface.branding import user_agent_fragment
+        _ua = user_agent_fragment()
+    except ImportError:
+        _ua = "Lorne/0.98"
     headers = {
         "Authorization": f"Bearer {key}",
         "Accept": "application/json",
-        "User-Agent": "TCA/2.0",
+        "User-Agent": _ua,
     }
 
     try:
